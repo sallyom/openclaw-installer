@@ -1,4 +1,5 @@
-export type DeployMode = "local" | "kubernetes" | "ssh" | "fleet";
+export type DeployMode = string;
+export type BuiltinDeployMode = "local" | "kubernetes" | "ssh" | "fleet";
 
 export interface DeployConfig {
   mode: DeployMode;

@@ -4,29 +4,15 @@ import { readFileSync, existsSync } from "node:fs";
 import { userInfo } from "node:os";
 import type { DeployConfig } from "../deployers/types.js";
 import { detectGcpDefaults, defaultVertexLocation } from "../services/gcp.js";
-import { LocalDeployer } from "../deployers/local.js";
-import { KubernetesDeployer } from "../deployers/kubernetes.js";
+import { registry } from "../deployers/registry.js";
 import { createLogCallback, sendStatus } from "../ws.js";
 
 const router = Router();
-const localDeployer = new LocalDeployer();
-const k8sDeployer = new KubernetesDeployer();
 
 function normalizeSshMaterial(value: string): string {
   const withoutBom = value.replace(/^\uFEFF/, "");
   const normalizedNewlines = withoutBom.replace(/\r\n?/g, "\n");
   return normalizedNewlines.endsWith("\n") ? normalizedNewlines : `${normalizedNewlines}\n`;
-}
-
-function getDeployer(mode: string) {
-  switch (mode) {
-    case "local":
-      return localDeployer;
-    case "kubernetes":
-      return k8sDeployer;
-    default:
-      return null;
-  }
 }
 
 router.post("/", async (req, res) => {
@@ -143,7 +129,7 @@ router.post("/", async (req, res) => {
     }
   }
 
-  const deployer = getDeployer(config.mode);
+  const deployer = registry.get(config.mode);
   if (!deployer) {
     res.status(400).json({ error: `Unsupported mode: ${config.mode}` });
     return;

@@ -13,6 +13,33 @@ import { detectGcpDefaults } from "./services/gcp.js";
 import { readdir, readFile } from "node:fs/promises";
 import { userInfo } from "node:os";
 import { installerDataDir } from "./paths.js";
+import { registry } from "./deployers/registry.js";
+import { LocalDeployer } from "./deployers/local.js";
+import { KubernetesDeployer } from "./deployers/kubernetes.js";
+import { loadPlugins } from "./plugins/loader.js";
+
+// Register built-in deployers
+registry.register({
+  mode: "local",
+  title: "This Machine",
+  description: "Run OpenClaw locally with podman/docker",
+  deployer: new LocalDeployer(),
+  detect: async () => !!(await detectRuntime()),
+  priority: 0,
+});
+registry.register({
+  mode: "kubernetes",
+  title: "Kubernetes",
+  description: "Deploy to a Kubernetes cluster",
+  deployer: new KubernetesDeployer(),
+  detect: async () => isClusterReachable(),
+  priority: 0,
+});
+
+// Load external plugins
+console.log("Loading plugins...");
+await loadPlugins(registry);
+console.log(`Plugins loaded. Registered deployers: ${registry.list().map(r => r.mode).join(", ")}`);
 
 const app = express();
 const server = createServer(app);
@@ -29,6 +56,7 @@ app.use("/api/agents", agentsRoutes);
 app.get("/api/health", async (_req, res) => {
   const runtime = await detectRuntime();
   const k8sReachable = await isClusterReachable();
+  const detected = await registry.detect();
 
   res.json({
     status: "ok",
@@ -36,6 +64,13 @@ app.get("/api/health", async (_req, res) => {
     k8sAvailable: k8sReachable,
     k8sContext: k8sReachable ? currentContext() : "",
     version: "0.1.0",
+    deployers: registry.list().map((reg) => ({
+      mode: reg.mode,
+      title: reg.title,
+      description: reg.description,
+      available: detected.some((d) => d.mode === reg.mode),
+      priority: reg.priority ?? 0,
+    })),
     defaults: {
       hasAnthropicKey: !!process.env.ANTHROPIC_API_KEY,
       hasOpenaiKey: !!process.env.OPENAI_API_KEY,

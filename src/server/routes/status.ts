@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { readFile } from "node:fs/promises";
 import { installerLocalInstanceDir } from "../paths.js";
+import { installerDataDir } from "../paths.js";
 import { join } from "node:path";
 import {
   discoverContainers,
@@ -8,15 +9,13 @@ import {
   detectRuntime,
   type DiscoveredContainer,
 } from "../services/container.js";
-import { LocalDeployer } from "../deployers/local.js";
-import { KubernetesDeployer, discoverK8sInstances } from "../deployers/kubernetes.js";
+import { discoverK8sInstances } from "../deployers/kubernetes.js";
 import { isClusterReachable } from "../services/k8s.js";
+import { registry } from "../deployers/registry.js";
 import { createLogCallback, sendStatus } from "../ws.js";
 import type { DeployResult } from "../deployers/types.js";
 
 const router = Router();
-const localDeployer = new LocalDeployer();
-const k8sDeployer = new KubernetesDeployer();
 
 function containerToInstance(c: DiscoveredContainer): DeployResult {
   const prefix = c.labels["openclaw.prefix"] || "";
@@ -76,7 +75,7 @@ function decodeSavedBase64UnlessPath(savedValue?: string, savedPath?: string): s
 // List all instances: running containers + stopped volumes (no container due to --rm) + K8s
 router.get("/", async (req, res) => {
   const instances: DeployResult[] = [];
-  const includeK8s = req.query.includeK8s === "1";
+  const includeK8s = req.query.includeK8s !== "0";
 
   try {
     // Local instances
@@ -168,12 +167,13 @@ router.get("/", async (req, res) => {
       try {
         const k8sInstances = await discoverK8sInstances();
         for (const ki of k8sInstances) {
-          instances.push({
+          const mode = await savedDeployMode(ki.namespace);
+          let instance: DeployResult = {
             id: ki.namespace,
-            mode: "kubernetes",
+            mode,
             status: ki.status,
             config: {
-              mode: "kubernetes",
+              mode,
               prefix: ki.prefix,
               agentName: ki.agentName,
               agentDisplayName: ki.agentName
@@ -187,7 +187,19 @@ router.get("/", async (req, res) => {
             containerId: ki.namespace,
             statusDetail: ki.statusDetail,
             pods: ki.pods,
-          });
+          };
+
+          // Let the deployer enrich with platform-specific info (e.g. Route URL)
+          const deployer = registry.get(mode);
+          if (deployer && typeof deployer.status === "function") {
+            try {
+              instance = await deployer.status(instance);
+            } catch {
+              // Use base instance if status enrichment fails
+            }
+          }
+
+          instances.push(instance);
         }
       } catch {
         // Keep local instances visible even if cluster discovery fails.
@@ -233,7 +245,11 @@ router.post("/:id/start", async (req, res) => {
     return;
   }
 
-  const deployer = instance.mode === "kubernetes" ? k8sDeployer : localDeployer;
+  const deployer = registry.get(instance.mode);
+  if (!deployer) {
+    res.status(400).json({ error: `No deployer registered for mode: ${instance.mode}` });
+    return;
+  }
   const log = createLogCallback(instance.id);
   try {
     await deployer.start(instance, log);
@@ -254,7 +270,11 @@ router.post("/:id/stop", async (req, res) => {
     return;
   }
 
-  const deployer = instance.mode === "kubernetes" ? k8sDeployer : localDeployer;
+  const deployer = registry.get(instance.mode);
+  if (!deployer) {
+    res.status(400).json({ error: `No deployer registered for mode: ${instance.mode}` });
+    return;
+  }
   const log = createLogCallback(instance.id);
   await deployer.stop(instance, log);
   sendStatus(instance.id, "stopped");
@@ -269,14 +289,20 @@ router.post("/:id/redeploy", async (req, res) => {
     return;
   }
 
-  if (instance.mode !== "kubernetes") {
-    res.status(400).json({ error: "Use Stop/Start for local instances — agent files are synced automatically on Start" });
+  const deployer = registry.get(instance.mode);
+  if (!deployer) {
+    res.status(400).json({ error: `No deployer registered for mode: ${instance.mode}` });
+    return;
+  }
+
+  if (!("redeploy" in deployer) || typeof (deployer as unknown as Record<string, unknown>).redeploy !== "function") {
+    res.status(400).json({ error: "Use Stop/Start for this deployer — redeploy is not supported" });
     return;
   }
 
   const log = createLogCallback(instance.id);
   try {
-    await k8sDeployer.redeploy(instance, log);
+    await ((deployer as unknown as Record<string, unknown> & { redeploy: (r: DeployResult, l: typeof log) => Promise<void> }).redeploy(instance, log));
     sendStatus(instance.id, "running");
     res.json({ status: "redeploying" });
   } catch (err) {
@@ -290,7 +316,7 @@ router.post("/:id/redeploy", async (req, res) => {
 router.get("/:id/token", async (req, res) => {
   // Check if this is a K8s instance
   const instance = await findInstance(req.params.id);
-  if (instance?.mode === "kubernetes") {
+  if (instance && instance.mode !== "local") {
     try {
       const core = (await import("../services/k8s.js")).coreApi();
       const ns = instance.config.namespace || instance.containerId || "";
@@ -349,8 +375,8 @@ router.get("/:id/token", async (req, res) => {
 router.get("/:id/command", async (req, res) => {
   const instance = await findInstance(req.params.id);
 
-  // K8s instance — return useful kubectl commands
-  if (instance?.mode === "kubernetes") {
+  // Cluster instance — return useful kubectl/oc commands
+  if (instance && instance.mode !== "local") {
     const ns = instance.config.namespace || instance.containerId || "";
 
     // Detect if LiteLLM sidecar is running
@@ -527,8 +553,8 @@ router.get("/:id/command", async (req, res) => {
 router.get("/:id/logs", async (req, res) => {
   const instance = await findInstance(req.params.id);
 
-  // K8s instance — read pod logs via K8s API
-  if (instance?.mode === "kubernetes") {
+  // Cluster instance — read pod logs via K8s API
+  if (instance && instance.mode !== "local") {
     const ns = instance.config.namespace || instance.containerId || "";
     try {
       const core = (await import("../services/k8s.js")).coreApi();
@@ -590,7 +616,11 @@ router.delete("/:id", async (req, res) => {
     return;
   }
 
-  const deployer = instance.mode === "kubernetes" ? k8sDeployer : localDeployer;
+  const deployer = registry.get(instance.mode);
+  if (!deployer) {
+    res.status(400).json({ error: `No deployer registered for mode: ${instance.mode}` });
+    return;
+  }
   const log = createLogCallback(instance.id);
   await deployer.teardown(instance, log);
   res.json({ status: "deleted" });
@@ -616,6 +646,21 @@ async function readSavedConfig(containerName: string): Promise<Record<string, st
   return vars;
 }
 
+
+/**
+ * Read the saved deploy-config.json for a K8s namespace to get the actual deploy mode.
+ * Returns "kubernetes" as fallback if no saved config exists.
+ */
+async function savedDeployMode(namespace: string): Promise<string> {
+  try {
+    const configPath = join(installerDataDir(), "k8s", namespace, "deploy-config.json");
+    const content = await readFile(configPath, "utf8");
+    const config = JSON.parse(content);
+    return config.mode || "kubernetes";
+  } catch {
+    return "kubernetes";
+  }
+}
 
 // Helper: find instance by container name, volume, or K8s namespace
 async function findInstance(name: string): Promise<DeployResult | null> {
@@ -717,12 +762,13 @@ async function findInstance(name: string): Promise<DeployResult | null> {
     const k8sInstances = await discoverK8sInstances();
     const ki = k8sInstances.find((i) => i.namespace === name);
     if (ki) {
-      return {
+      const mode = await savedDeployMode(ki.namespace);
+      let instance: DeployResult = {
         id: ki.namespace,
-        mode: "kubernetes",
+        mode,
         status: ki.status,
         config: {
-          mode: "kubernetes",
+          mode,
           prefix: ki.prefix,
           agentName: ki.agentName,
           agentDisplayName: ki.agentName
@@ -737,6 +783,17 @@ async function findInstance(name: string): Promise<DeployResult | null> {
         statusDetail: ki.statusDetail,
         pods: ki.pods,
       };
+
+      const deployer = registry.get(mode);
+      if (deployer && typeof deployer.status === "function") {
+        try {
+          instance = await deployer.status(instance);
+        } catch {
+          // Use base instance if status enrichment fails
+        }
+      }
+
+      return instance;
     }
   }
 

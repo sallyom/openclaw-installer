@@ -31,18 +31,18 @@ export default function App() {
         </button>
       </div>
 
-      {tab === "deploy" && (
-        <>
-          <DeployForm
-            onDeployStarted={(id) => {
-              setActiveDeployId(id);
-            }}
-          />
-          {activeDeployId && <LogStream deployId={activeDeployId} />}
-        </>
-      )}
+      <div style={{ display: tab === "deploy" ? "block" : "none" }}>
+        <DeployForm
+          onDeployStarted={(id) => {
+            setActiveDeployId(id);
+          }}
+        />
+        {activeDeployId && <LogStream deployId={activeDeployId} />}
+      </div>
 
-      {tab === "instances" && <InstanceList />}
+      <div style={{ display: tab === "instances" ? "block" : "none" }}>
+        <InstanceList />
+      </div>
     </div>
   );
 }

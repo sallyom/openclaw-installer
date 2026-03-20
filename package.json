@@ -3,6 +3,32 @@
   "version": "0.1.0",
   "description": "OpenClaw installer and fleet manager",
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/server/index.d.ts",
+      "default": "./dist/server/index.js"
+    },
+    "./deployers/types": {
+      "types": "./dist/server/deployers/types.d.ts",
+      "default": "./dist/server/deployers/types.js"
+    },
+    "./deployers/kubernetes": {
+      "types": "./dist/server/deployers/kubernetes.d.ts",
+      "default": "./dist/server/deployers/kubernetes.js"
+    },
+    "./deployers/registry": {
+      "types": "./dist/server/deployers/registry.d.ts",
+      "default": "./dist/server/deployers/registry.js"
+    },
+    "./deployers/k8s-helpers": {
+      "types": "./dist/server/deployers/k8s-helpers.d.ts",
+      "default": "./dist/server/deployers/k8s-helpers.js"
+    },
+    "./services/k8s": {
+      "types": "./dist/server/services/k8s.d.ts",
+      "default": "./dist/server/services/k8s.js"
+    }
+  },
   "scripts": {
     "dev": "concurrently \"tsx watch src/server/index.ts\" \"vite\"",
     "build": "vite build && tsc -p tsconfig.server.json",

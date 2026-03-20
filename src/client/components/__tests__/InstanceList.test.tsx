@@ -163,7 +163,7 @@ describe("InstanceList", () => {
     await waitFor(() => {
       expect(screen.getByText("secret-token-123")).toBeInTheDocument();
     });
-    expect(screen.getByRole("button", { name: /hide/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^hide$/i })).toBeInTheDocument();
   });
 
   it("calls start endpoint when Start is clicked", async () => {
@@ -278,20 +278,20 @@ describe("InstanceList", () => {
     });
   });
 
-  it("opts into kubernetes discovery only when requested", async () => {
+  it("includes cluster instances by default and allows hiding them", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const fetchMock = mockFetchWith([]);
     globalThis.fetch = fetchMock;
 
     render(<InstanceList />);
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /include k8s/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /hide cluster/i })).toBeInTheDocument();
     });
-    expect(fetchMock).toHaveBeenCalledWith("/api/instances");
+    expect(fetchMock).toHaveBeenCalledWith("/api/instances?includeK8s=1");
 
-    await user.click(screen.getByRole("button", { name: /include k8s/i }));
+    await user.click(screen.getByRole("button", { name: /hide cluster/i }));
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith("/api/instances?includeK8s=1");
+      expect(fetchMock).toHaveBeenCalledWith("/api/instances");
     });
   });
 });

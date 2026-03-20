@@ -1,7 +1,14 @@
 import React, { useEffect, useState } from "react";
 
-type Mode = "local" | "kubernetes" | "ssh";
 type InferenceProvider = "anthropic" | "openai" | "vertex-anthropic" | "vertex-google" | "custom-endpoint";
+
+interface DeployerInfo {
+  mode: string;
+  title: string;
+  description: string;
+  available: boolean;
+  priority: number;
+}
 
 interface Props {
   onDeployStarted: (deployId: string) => void;
@@ -37,27 +44,11 @@ interface SavedConfig {
   vars: Record<string, string>;
 }
 
-const MODES: Array<{ id: Mode; icon: string; title: string; desc: string; disabled?: boolean }> = [
-  {
-    id: "local" as const,
-    icon: "💻",
-    title: "This Machine",
-    desc: "Run OpenClaw locally with podman/docker",
-  },
-  {
-    id: "kubernetes" as const,
-    icon: "☸️",
-    title: "Kubernetes",
-    desc: "Deploy to a Kubernetes cluster",
-  },
-  {
-    id: "ssh" as const,
-    icon: "🖥️",
-    title: "🚧 Remote Host",
-    desc: "Deploy via SSH to a Linux machine (coming soon)",
-    disabled: true,
-  },
-];
+const MODE_ICONS: Record<string, string> = {
+  local: "💻",
+  kubernetes: "☸️",
+  ssh: "🖥️",
+};
 
 const PROVIDER_OPTIONS: Array<{ id: InferenceProvider; label: string; desc: string }> = [
   { id: "anthropic", label: "Anthropic", desc: "Claude models via Anthropic API" },
@@ -123,9 +114,10 @@ function inferDisplayNameFromAgentName(value: string): string {
 const LAST_AGENT_SOURCE_DIR_KEY = "openclaw:last-agent-source-dir";
 
 export default function DeployForm({ onDeployStarted }: Props) {
-  const [mode, setMode] = useState<Mode>("local");
+  const [mode, setMode] = useState("local");
   const [deploying, setDeploying] = useState(false);
   const [defaults, setDefaults] = useState<ServerDefaults | null>(null);
+  const [deployers, setDeployers] = useState<DeployerInfo[]>([]);
   const [savedConfigs, setSavedConfigs] = useState<SavedConfig[]>([]);
   const [loadedConfigLabel, setLoadedConfigLabel] = useState<string | null>(null);
   const [autoLoadedEnvDir, setAutoLoadedEnvDir] = useState<string | null>(null);
@@ -219,6 +211,18 @@ export default function DeployForm({ onDeployStarted }: Props) {
           k8sContext: data.k8sContext,
         };
         setDefaults(d);
+
+        if (Array.isArray(data.deployers)) {
+          const sorted = [...(data.deployers as DeployerInfo[])].sort((a, b) => {
+            if (a.available !== b.available) return a.available ? -1 : 1;
+            return (b.priority ?? 0) - (a.priority ?? 0);
+          });
+          setDeployers(sorted);
+          if (sorted.length > 0 && sorted[0].available) {
+            setMode(sorted[0].mode);
+          }
+        }
+
         if (d.prefix) {
           setConfig((prev) => ({ ...prev, prefix: d.prefix }));
         }
@@ -645,21 +649,21 @@ export default function DeployForm({ onDeployStarted }: Props) {
     <div>
       {/* Mode selector */}
       <div className="mode-grid">
-        {MODES.map((m) => {
-          const isSelected = mode === m.id;
+        {deployers.map((m) => {
+          const isSelected = mode === m.mode;
           return (
             <div
-              key={m.id}
-              className={`mode-card ${isSelected ? "selected" : ""} ${m.disabled ? "disabled" : ""}`}
-              onClick={() => !m.disabled && setMode(m.id)}
-              style={m.disabled ? { opacity: 0.5, cursor: "not-allowed" } : undefined}
+              key={m.mode}
+              className={`mode-card ${isSelected ? "selected" : ""} ${!m.available ? "disabled" : ""}`}
+              onClick={() => m.available && setMode(m.mode)}
+              style={!m.available ? { opacity: 0.5, cursor: "not-allowed" } : undefined}
             >
               <div className="mode-radio">
                 <span className={`radio-dot ${isSelected ? "checked" : ""}`} />
               </div>
-              <div className="mode-icon">{m.icon}</div>
+              <div className="mode-icon">{MODE_ICONS[m.mode] || "🔌"}</div>
               <div className="mode-title">{m.title}</div>
-              <div className="mode-desc">{m.desc}</div>
+              <div className="mode-desc">{m.description}</div>
               {isSelected && <div className="mode-selected-badge">Selected</div>}
             </div>
           );

@@ -53,7 +53,7 @@ function StatusBadge({ inst, isActing }: { inst: Instance; isActing: boolean }) 
 }
 
 function K8sProgress({ inst }: { inst: Instance }) {
-  if (inst.mode !== "kubernetes") return null;
+  if (inst.mode === "local") return null;
   if (!inst.statusDetail && (!inst.pods || inst.pods.length === 0)) return null;
   if (inst.status === "running") return null;
 
@@ -90,7 +90,7 @@ export default function InstanceList() {
   const [instances, setInstances] = useState<Instance[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [includeK8s, setIncludeK8s] = useState(false);
+  const [includeK8s, setIncludeK8s] = useState(true);
   const [acting, setActing] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, ExpandedPanel>>({});
   const [panelData, setPanelData] = useState<Record<string, string>>({});
@@ -121,7 +121,7 @@ export default function InstanceList() {
 
   const k8sToggle = (
     <button className="btn btn-ghost" onClick={() => setIncludeK8s((prev) => !prev)}>
-      {includeK8s ? "Hide K8s" : "Include K8s"}
+      {includeK8s ? "Hide Cluster" : "Show Cluster"}
     </button>
   );
 
@@ -154,7 +154,7 @@ export default function InstanceList() {
   const handleDeleteData = async (id: string, mode?: string) => {
     if (
       !confirm(
-        mode === "kubernetes"
+        mode !== "local"
           ? "Delete namespace and all data? This removes the PVC, secrets, deployment, and namespace. Cannot be undone."
           : "Delete all data? This removes the data volume (config, sessions, workspaces). Cannot be undone.",
       )
@@ -269,7 +269,7 @@ export default function InstanceList() {
         const isStopped = inst.status === "stopped";
         const isDeploying = inst.status === "deploying";
         const isError = inst.status === "error";
-        const isK8s = inst.mode === "kubernetes";
+        const isK8s = inst.mode !== "local";
         const canStop = isRunning || isDeploying || isError;
         // K8s: allow delete anytime (it deletes the whole namespace)
         // Local: must stop first
@@ -282,12 +282,12 @@ export default function InstanceList() {
                 <div className="instance-name">
                   {inst.containerId || inst.id}
                   <StatusBadge inst={inst} isActing={isActing} />
-                  {inst.mode === "kubernetes" && (
+                  {isK8s && (
                     <span
                       className="badge"
                       style={{ marginLeft: "0.25rem", background: "var(--accent)", color: "#fff", fontSize: "0.65rem" }}
                     >
-                      K8s
+                      {inst.mode === "openshift" ? "OpenShift" : "K8s"}
                     </span>
                   )}
                 </div>
