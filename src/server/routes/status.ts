@@ -75,7 +75,7 @@ function decodeSavedBase64UnlessPath(savedValue?: string, savedPath?: string): s
 // List all instances: running containers + stopped volumes (no container due to --rm) + K8s
 router.get("/", async (req, res) => {
   const instances: DeployResult[] = [];
-  const includeK8s = req.query.includeK8s !== "0";
+  const includeK8s = req.query.includeK8s === "1";
 
   try {
     // Local instances

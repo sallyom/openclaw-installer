@@ -2,7 +2,7 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "rootDir": ".",
-    "outDir": ".",
+    "outDir": "dist",
     "declaration": false,
     "jsx": "preserve"
   },

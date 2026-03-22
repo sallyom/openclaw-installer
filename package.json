@@ -31,7 +31,7 @@
   },
   "scripts": {
     "dev": "concurrently \"tsx watch src/server/index.ts\" \"vite\"",
-    "build": "vite build && tsc -p tsconfig.server.json && tsc -p tsconfig.provider-plugins.json",
+    "build": "vite build && tsc -p tsconfig.server.json && tsc -p tsconfig.provider-plugins.json && node scripts/prepare-dist-runtime.mjs",
     "lint": "eslint .",
     "start": "node dist/server/index.js",
     "preview": "vite build && node dist/server/index.js",

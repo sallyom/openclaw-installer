@@ -310,5 +310,10 @@ describe("InstanceList", () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith("/api/instances?includeK8s=1");
     });
+
+    await user.click(screen.getByRole("button", { name: /hide k8s/i }));
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/instances");
+    });
   });
 });

@@ -4,6 +4,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { v4 as uuid } from "uuid";
 import { coreApi, appsApi, loadKubeConfig, hasOtelOperator, k8sApiHttpCode } from "../services/k8s.js";
+import { ensureK8sPortForward } from "../services/k8s-port-forward.js";
 import { cronJobsFile, installerK8sInstanceDir, skillsDir } from "../paths.js";
 import { loadTextTree } from "../state-tree.js";
 import type {
@@ -358,7 +359,15 @@ export class KubernetesDeployer implements Deployer {
       const replicas = dep.status?.readyReplicas ?? 0;
       const desired = dep.spec?.replicas ?? 1;
       if (desired === 0) return { ...result, status: "stopped" };
-      return { ...result, status: replicas > 0 ? "running" : "unknown" };
+      if (replicas > 0) {
+        try {
+          const { url } = await ensureK8sPortForward(ns);
+          return { ...result, status: "running", url };
+        } catch {
+          return { ...result, status: "running" };
+        }
+      }
+      return { ...result, status: "unknown" };
     } catch {
       return { ...result, status: "unknown" };
     }

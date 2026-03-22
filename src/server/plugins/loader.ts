@@ -1,5 +1,5 @@
 import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
@@ -8,11 +8,19 @@ import type { DeployerRegistry, InstallerPlugin } from "../deployers/registry.js
 
 const PLUGIN_PREFIX = "openclaw-installer-";
 const CONFIG_PATH = join(homedir(), ".openclaw", "installer", "plugins.json");
+const BUILT_RUNTIME_SEGMENT = `${sep}dist${sep}`;
+
+function isBuiltRuntime(): boolean {
+  return import.meta.dirname.includes(BUILT_RUNTIME_SEGMENT);
+}
 
 async function discoverProviderPlugins(registry: DeployerRegistry): Promise<void> {
   // Resolve repo root: this file is at src/server/plugins/loader.ts, so 3 levels up
   const repoRoot = join(import.meta.dirname, "..", "..", "..");
-  const providerPluginsDir = join(repoRoot, "provider-plugins");
+  const builtRuntime = isBuiltRuntime();
+  const providerPluginsDir = builtRuntime
+    ? join(repoRoot, "dist", "provider-plugins")
+    : join(repoRoot, "provider-plugins");
 
   if (!existsSync(providerPluginsDir)) return;
 
@@ -27,11 +35,12 @@ async function discoverProviderPlugins(registry: DeployerRegistry): Promise<void
     if (!entry.isDirectory()) continue;
 
     const name = String(entry.name);
-    const srcIndex = join(providerPluginsDir, name, "src", "index.ts");
     const jsIndex = join(providerPluginsDir, name, "src", "index.js");
+    const srcIndex = join(providerPluginsDir, name, "src", "index.ts");
 
-    // Prefer .ts (tsx dev mode), fall back to .js (compiled)
-    const entryPoint = existsSync(srcIndex) ? srcIndex : existsSync(jsIndex) ? jsIndex : null;
+    const entryPoint = builtRuntime
+      ? (existsSync(jsIndex) ? jsIndex : null)
+      : (existsSync(srcIndex) ? srcIndex : existsSync(jsIndex) ? jsIndex : null);
     if (!entryPoint) continue;
 
     try {
