@@ -1,6 +1,6 @@
 import process from "node:process";
 import { randomBytes } from "node:crypto";
-import type { DeployConfig } from "./types.js";
+import type { DeployConfig, DeploySecretRef } from "./types.js";
 import { shouldUseLitellmProxy, litellmModelName, LITELLM_PORT } from "./litellm.js";
 import { shouldUseOtel, OTEL_HTTP_PORT } from "./otel.js";
 import { buildSandboxConfig } from "./sandbox.js";
@@ -100,8 +100,9 @@ export function deriveModel(config: DeployConfig): string {
       ? "anthropic-vertex/claude-sonnet-4-6"
       : "google-vertex/gemini-2.5-pro";
   }
-  if (config.openaiApiKey) return "openai/gpt-5.4";
+  if (config.openaiApiKey || config.openaiApiKeyRef) return "openai/gpt-5.4";
   if (config.modelEndpoint) return "openai/default";
+  if (config.anthropicApiKey || config.anthropicApiKeyRef) return "anthropic/claude-sonnet-4-6";
   return "anthropic/claude-sonnet-4-6";
 }
 
@@ -110,6 +111,99 @@ function subagentConfig(policy?: string): { allowAgents: string[] } {
     case "self": return { allowAgents: ["self"] };
     case "unrestricted": return { allowAgents: ["*"] };
     default: return { allowAgents: [] };
+  }
+}
+
+function cloneSecretRef(ref: DeploySecretRef): Record<string, string> {
+  return {
+    source: ref.source,
+    provider: ref.provider,
+    id: ref.id,
+  };
+}
+
+function hasSecretRef(ref?: DeploySecretRef): ref is DeploySecretRef {
+  return Boolean(ref?.source && ref.provider.trim() && ref.id.trim());
+}
+
+function parseSecretProvidersJson(raw?: string): Record<string, unknown> | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed) return undefined;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Validation happens in the route; config generation just ignores invalid input.
+  }
+  return undefined;
+}
+
+function shouldAutoEnvRef(config: DeployConfig, explicitRef: DeploySecretRef | undefined, value: string | undefined): boolean {
+  return config.mode !== "local" && !hasSecretRef(explicitRef) && Boolean(value?.trim());
+}
+
+function envSecretRef(id: string): DeploySecretRef {
+  return {
+    source: "env",
+    provider: "default",
+    id,
+  };
+}
+
+function attachSecretHandlingConfig(ocConfig: Record<string, unknown>, config: DeployConfig): void {
+  const providers = parseSecretProvidersJson(config.secretsProvidersJson) || {};
+  let shouldDefineDefaultEnvProvider = false;
+
+  const models = (ocConfig.models as Record<string, unknown> | undefined) || {};
+  const providersMap = (models.providers as Record<string, unknown> | undefined) || {};
+
+  const openaiApiKeyRef = hasSecretRef(config.openaiApiKeyRef)
+    ? config.openaiApiKeyRef
+    : shouldAutoEnvRef(config, config.openaiApiKeyRef, config.openaiApiKey)
+      ? envSecretRef("OPENAI_API_KEY")
+      : undefined;
+  if (openaiApiKeyRef) {
+    if (openaiApiKeyRef.source === "env" && openaiApiKeyRef.provider === "default") {
+      shouldDefineDefaultEnvProvider = true;
+    }
+    if (config.modelEndpoint?.trim()) {
+      const openaiProvider: Record<string, unknown> = {
+        ...((providersMap.openai as Record<string, unknown> | undefined) || {}),
+        apiKey: cloneSecretRef(openaiApiKeyRef),
+      };
+      openaiProvider.baseUrl = config.modelEndpoint.trim();
+      providersMap.openai = openaiProvider;
+    }
+  }
+
+  if (Object.keys(providersMap).length > 0) {
+    models.providers = providersMap;
+    ocConfig.models = models;
+  }
+
+  const telegramBotTokenRef = hasSecretRef(config.telegramBotTokenRef)
+    ? config.telegramBotTokenRef
+    : shouldAutoEnvRef(config, config.telegramBotTokenRef, config.telegramBotToken)
+      ? envSecretRef("TELEGRAM_BOT_TOKEN")
+      : undefined;
+  if (telegramBotTokenRef) {
+    if (telegramBotTokenRef.source === "env" && telegramBotTokenRef.provider === "default") {
+      shouldDefineDefaultEnvProvider = true;
+    }
+    const channels = (ocConfig.channels as Record<string, unknown> | undefined) || {};
+    const telegram = (channels.telegram as Record<string, unknown> | undefined) || {};
+    telegram.botToken = cloneSecretRef(telegramBotTokenRef);
+    channels.telegram = telegram;
+    ocConfig.channels = channels;
+  }
+
+  if (shouldDefineDefaultEnvProvider && !("default" in providers)) {
+    providers.default = { source: "env" };
+  }
+  if (Object.keys(providers).length > 0) {
+    ocConfig.secrets = { providers };
   }
 }
 
@@ -195,13 +289,15 @@ export function buildOpenClawConfig(config: DeployConfig, gatewayToken: string):
     ocConfig.tools = sandboxToolPolicy;
   }
 
-  if (config.telegramBotToken && config.telegramAllowFrom) {
+  if ((config.telegramBotToken || config.telegramBotTokenRef) && config.telegramAllowFrom) {
     const allowFrom = config.telegramAllowFrom
       .split(",")
       .map((s) => parseInt(s.trim(), 10))
       .filter((n) => !isNaN(n));
     ocConfig.channels = { telegram: { dmPolicy: "allowlist", allowFrom } };
   }
+
+  attachSecretHandlingConfig(ocConfig, config);
 
   return ocConfig;
 }

@@ -12,6 +12,16 @@ npm install && npm run build && npm run dev
 
 Open `http://localhost:3000`, pick your deploy target, fill in the form, and click Deploy.
 
+## Secret Handling
+
+The installer now always uses upstream OpenClaw SecretRefs where it can.
+
+- Local deploys inject secrets as container environment variables and reference them from `openclaw.json`
+- Kubernetes and OpenShift deploys store secrets in the installer-managed `openclaw-secrets` Secret, inject them with `secretKeyRef`, and reference them from `openclaw.json`
+- You can still provide explicit SecretRef overrides and optional `secrets.providers` JSON for `env`, `file`, or `exec`-based setups such as Vault
+
+This keeps raw third-party secrets out of generated `openclaw.json` while staying aligned with upstream OpenClaw secret handling.
+
 ### With the launcher script
 
 ```bash

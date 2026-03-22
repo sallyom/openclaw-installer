@@ -27,6 +27,16 @@ npm run dev
 
 Open `http://localhost:3000`, choose `Kubernetes`, fill in the deploy form, and click `Deploy`.
 
+## Secret Handling
+
+For Kubernetes deploys, the installer now uses the safer upstream-compatible secret path by default:
+
+- secrets you enter in the form are written to the installer-managed `openclaw-secrets` Kubernetes Secret
+- the pod receives them through `secretKeyRef`
+- generated `openclaw.json` references them with env-backed OpenClaw SecretRefs instead of embedding raw secret values
+
+You can still provide optional `secrets.providers` JSON and explicit SecretRef overrides when you want `file` or `exec`-based providers such as Vault.
+
 ## Access
 
 After deploy, the simplest path is:

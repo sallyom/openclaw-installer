@@ -131,10 +131,10 @@ export function secretManifest(ns: string, config: DeployConfig, gatewayToken: s
   const data: Record<string, string> = {
     OPENCLAW_GATEWAY_TOKEN: gatewayToken,
   };
-  if (config.anthropicApiKey) data.ANTHROPIC_API_KEY = config.anthropicApiKey;
-  if (config.openaiApiKey) data.OPENAI_API_KEY = config.openaiApiKey;
+  if (config.anthropicApiKey && !config.anthropicApiKeyRef) data.ANTHROPIC_API_KEY = config.anthropicApiKey;
+  if (config.openaiApiKey && !config.openaiApiKeyRef) data.OPENAI_API_KEY = config.openaiApiKey;
   if (config.modelEndpoint) data.MODEL_ENDPOINT = config.modelEndpoint;
-  if (config.telegramBotToken) data.TELEGRAM_BOT_TOKEN = config.telegramBotToken;
+  if (config.telegramBotToken && !config.telegramBotTokenRef) data.TELEGRAM_BOT_TOKEN = config.telegramBotToken;
 
   // Resolve project ID from config or from the SA JSON
   const projectId = config.googleCloudProject

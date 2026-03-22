@@ -6,6 +6,13 @@ export type InferenceProvider =
   | "vertex-anthropic"
   | "vertex-google"
   | "custom-endpoint";
+export type SecretRefSource = "env" | "file" | "exec";
+
+export interface DeploySecretRef {
+  source: SecretRefSource;
+  provider: string;
+  id: string;
+}
 
 export interface DeployConfig {
   mode: DeployMode;
@@ -13,6 +20,12 @@ export interface DeployConfig {
   agentName: string;
   agentDisplayName: string;
   prefix?: string;
+  // Agent security / upstream SecretRefs
+  agentSecurityMode?: "basic" | "secretrefs";
+  secretsProvidersJson?: string;
+  anthropicApiKeyRef?: DeploySecretRef;
+  openaiApiKeyRef?: DeploySecretRef;
+  telegramBotTokenRef?: DeploySecretRef;
   // Sandbox
   sandboxEnabled?: boolean;
   sandboxMode?: "off" | "non-main" | "all";

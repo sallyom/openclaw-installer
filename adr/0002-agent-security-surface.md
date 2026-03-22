@@ -2,17 +2,17 @@
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
-The installer currently handles most credentials in the simplest possible way:
+The installer historically handled most credentials in the simplest possible way:
 
 - collect secrets in the UI
 - persist installer-managed values
 - inject them into the OpenClaw runtime as plaintext environment variables or generated config
 
-That path is still useful, but upstream OpenClaw now has stronger built-in security features for secret handling:
+Upstream OpenClaw now has stronger built-in security features for secret handling:
 
 - SecretRefs for `env`, `file`, and `exec` providers
 - `openclaw secrets audit|configure|apply|reload`
@@ -24,20 +24,19 @@ We also want a place in the installer UI for future hardening options, including
 
 We add an `Agent Security` section to the installer UX and use it as the home for security-related deployment options.
 
-### Phase 1
+For secret handling, the installer now always prefers the upstream OpenClaw model instead of offering a legacy/basic mode toggle.
 
-Phase 1 focuses on upstream-compatible secret handling:
-
-- keep the current plaintext/env injection flow as the default simple path
-- add an advanced path that maps installer inputs to OpenClaw SecretRef-based configuration
-- support SecretRef sources that already exist upstream:
+- Local deploys inject secrets as environment variables and write env-backed SecretRefs into `openclaw.json`
+- Kubernetes and OpenShift deploys store secrets in the installer-managed Kubernetes Secret, inject them with `secretKeyRef`, and write env-backed SecretRefs into `openclaw.json`
+- explicit SecretRef overrides remain available for:
   - `env`
   - `file`
   - `exec`
+- optional `secrets.providers` JSON remains available for provider-backed setups such as Vault
 
 The installer should prefer configuring OpenClaw's native security model over inventing a parallel secret-management system.
 
-### Phase 2+
+### Future Work
 
 Future hardening options may also live under `Agent Security`, including:
 
@@ -58,15 +57,13 @@ These are explicitly out of scope for the first implementation.
 
 ### Negative
 
-- Adds UX complexity compared with the current "just paste the token" flow.
-- Requires clear copy so users understand the difference between plaintext secrets and SecretRefs.
+- Adds some UX complexity because advanced users can still override the default env-backed SecretRefs with explicit provider details.
 - Some provider-backed SecretRef flows require runtime prerequisites that the installer cannot magically provide, such as:
   - a `vault` binary in the runtime image
   - `VAULT_ADDR` / `VAULT_TOKEN` or equivalent auth available in the runtime environment
 
 ### Risks
 
-- If the UI exposes low-level provider details too early, the feature may confuse users who only want a simple local deploy.
 - SecretRef support in the installer may create expectations that every deploy target automatically has the required external tooling installed. The UX must state runtime prerequisites explicitly.
 
 ## Notes

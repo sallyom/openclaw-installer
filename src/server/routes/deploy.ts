@@ -2,7 +2,7 @@ import { Router } from "express";
 import { v4 as uuid } from "uuid";
 import { readFileSync, existsSync } from "node:fs";
 import { userInfo } from "node:os";
-import type { DeployConfig } from "../deployers/types.js";
+import type { DeployConfig, DeploySecretRef } from "../deployers/types.js";
 import { validateAgentName } from "../../shared/validate-agent-name.js";
 import { detectGcpDefaults, defaultVertexLocation } from "../services/gcp.js";
 import { namespaceName } from "../deployers/k8s-helpers.js";
@@ -24,6 +24,18 @@ function trimOptional(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function normalizeSecretRef(ref: DeploySecretRef | undefined): DeploySecretRef | undefined {
+  if (!ref) return undefined;
+  const source = ref.source;
+  const provider = trimOptional(ref.provider);
+  const id = trimOptional(ref.id);
+  if (!source && !provider && !id) return undefined;
+  if ((source !== "env" && source !== "file" && source !== "exec") || !provider || !id) {
+    throw new Error("SecretRef requires source, provider, and id");
+  }
+  return { source, provider, id };
+}
+
 router.post("/", async (req, res) => {
   const config = req.body as DeployConfig;
 
@@ -41,6 +53,30 @@ router.post("/", async (req, res) => {
   config.agentSourceDir = trimOptional(config.agentSourceDir);
   config.otelEndpoint = trimOptional(config.otelEndpoint);
   config.otelExperimentId = trimOptional(config.otelExperimentId);
+  config.secretsProvidersJson = trimOptional(config.secretsProvidersJson);
+
+  try {
+    config.anthropicApiKeyRef = normalizeSecretRef(config.anthropicApiKeyRef);
+    config.openaiApiKeyRef = normalizeSecretRef(config.openaiApiKeyRef);
+    config.telegramBotTokenRef = normalizeSecretRef(config.telegramBotTokenRef);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    return;
+  }
+
+  if (config.secretsProvidersJson) {
+    try {
+      const parsed = JSON.parse(config.secretsProvidersJson);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("secretsProvidersJson must be a JSON object");
+      }
+    } catch (err) {
+      res.status(400).json({
+        error: `Invalid secretsProvidersJson: ${err instanceof Error ? err.message : String(err)}`,
+      });
+      return;
+    }
+  }
 
   if (!config.mode || !config.agentName) {
     res.status(400).json({
@@ -81,6 +117,7 @@ router.post("/", async (req, res) => {
   if (
     config.inferenceProvider === "anthropic"
     && !config.anthropicApiKey
+    && !config.anthropicApiKeyRef
     && process.env.ANTHROPIC_API_KEY
   ) {
     config.anthropicApiKey = process.env.ANTHROPIC_API_KEY;
@@ -88,6 +125,7 @@ router.post("/", async (req, res) => {
   if (
     (config.inferenceProvider === "openai" || config.inferenceProvider === "custom-endpoint")
     && !config.openaiApiKey
+    && !config.openaiApiKeyRef
     && process.env.OPENAI_API_KEY
   ) {
     config.openaiApiKey = process.env.OPENAI_API_KEY;
@@ -100,7 +138,7 @@ router.post("/", async (req, res) => {
     config.modelEndpoint = process.env.MODEL_ENDPOINT;
   }
   if (config.telegramEnabled) {
-    if (!config.telegramBotToken && process.env.TELEGRAM_BOT_TOKEN) {
+    if (!config.telegramBotToken && !config.telegramBotTokenRef && process.env.TELEGRAM_BOT_TOKEN) {
       config.telegramBotToken = process.env.TELEGRAM_BOT_TOKEN;
     }
     if (!config.telegramAllowFrom && process.env.TELEGRAM_ALLOW_FROM) {

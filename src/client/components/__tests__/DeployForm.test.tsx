@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import DeployForm from "../DeployForm";
 
 // Stub fetch for /api/health to return deployer data
@@ -32,6 +32,10 @@ function mockHealthResponse(deployers: Array<{ mode: string; title: string; desc
 describe("DeployForm deployer visibility (issue #10)", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    cleanup();
   });
 
   it("hides unavailable plugin deployers", async () => {
@@ -96,6 +100,10 @@ describe("DeployForm agent name validation (issue #7)", () => {
     vi.restoreAllMocks();
   });
 
+  afterEach(() => {
+    cleanup();
+  });
+
   it("disables deploy button when agent name is empty", async () => {
     global.fetch = mockHealthResponse([
       { mode: "local", title: "This Machine", description: "Run locally", available: true, priority: 0, builtIn: true },
@@ -139,5 +147,45 @@ describe("DeployForm agent name validation (issue #7)", () => {
     await waitFor(() => {
       expect(screen.getAllByText("Agent name can only contain lowercase letters, numbers, and hyphens").length).toBeGreaterThan(0);
     });
+  });
+
+  it("validates secret providers JSON when SecretRef mode is enabled", async () => {
+    global.fetch = mockHealthResponse([
+      { mode: "local", title: "This Machine", description: "Run locally", available: true, priority: 0, builtIn: true },
+    ]);
+
+    render(<DeployForm onDeployStarted={() => {}} />);
+
+    await screen.findAllByRole("button", { name: /deploy openclaw/i });
+
+    fireEvent.change(screen.getAllByPlaceholderText("e.g., lynx")[0], { target: { value: "lynx" } });
+    fireEvent.change(screen.getAllByRole("textbox").find((el) => el.tagName === "TEXTAREA") as HTMLTextAreaElement, {
+      target: { value: "{not json" },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Secret providers JSON is invalid.")).toBeTruthy();
+    });
+  });
+
+  it("shows Agent Options controls and all advanced secret override targets", async () => {
+    global.fetch = mockHealthResponse([
+      { mode: "local", title: "This Machine", description: "Run locally", available: true, priority: 0, builtIn: true },
+    ]);
+
+    render(<DeployForm onDeployStarted={() => {}} />);
+
+    await screen.findAllByRole("button", { name: /deploy openclaw/i });
+
+    expect(screen.getAllByText("Agent Options").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Agent Source Directory").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Enable Cron Jobs").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Subagent Spawning").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByText("Advanced: Experimental External Secret Providers"));
+
+    expect(await screen.findByText("Anthropic SecretRef Source")).toBeTruthy();
+    expect(screen.getByText("OpenAI SecretRef Source")).toBeTruthy();
+    expect(screen.getByText("Telegram SecretRef Source")).toBeTruthy();
   });
 });

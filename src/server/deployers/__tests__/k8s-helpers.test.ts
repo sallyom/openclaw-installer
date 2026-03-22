@@ -116,6 +116,110 @@ describe("model config generation", () => {
     expect(normalizeModelRef(config, "litellm/my-model")).toBe("litellm/my-model");
     expect(normalizeModelRef(config, "anthropic-vertex/my-model")).toBe("anthropic-vertex/my-model");
   });
+
+  it("writes external secret provider config without emitting an invalid plain OpenAI provider stub", () => {
+    const config = makeConfig({
+      inferenceProvider: "openai",
+      secretsProvidersJson: JSON.stringify({
+        default: { source: "env" },
+        vault_openai: {
+          source: "exec",
+          command: "/usr/local/bin/vault",
+          args: ["kv", "get", "-field=OPENAI_API_KEY", "secret/openclaw"],
+        },
+      }),
+      openaiApiKeyRef: {
+        source: "exec",
+        provider: "vault_openai",
+        id: "value",
+      },
+      telegramBotTokenRef: {
+        source: "env",
+        provider: "default",
+        id: "TELEGRAM_BOT_TOKEN",
+      },
+      telegramAllowFrom: "12345",
+    });
+
+    const rendered = buildOpenClawConfig(config, "gateway-token") as {
+      secrets?: { providers?: Record<string, unknown> };
+      models?: { providers?: Record<string, { apiKey?: unknown }> };
+      channels?: { telegram?: { botToken?: unknown; allowFrom?: number[] } };
+    };
+
+    expect(rendered.secrets?.providers).toMatchObject({
+      default: { source: "env" },
+      vault_openai: {
+        source: "exec",
+        command: "/usr/local/bin/vault",
+      },
+    });
+    expect(rendered.models?.providers?.openai).toBeUndefined();
+    expect(rendered.channels?.telegram?.botToken).toEqual({
+      source: "env",
+      provider: "default",
+      id: "TELEGRAM_BOT_TOKEN",
+    });
+    expect(rendered.channels?.telegram?.allowFrom).toEqual([12345]);
+  });
+
+  it("auto-generates env SecretRefs for supported cluster secrets without an invalid plain OpenAI provider stub", () => {
+    const config = makeConfig({
+      mode: "kubernetes",
+      inferenceProvider: "openai",
+      openaiApiKey: "sk-openai-test",
+      telegramEnabled: true,
+      telegramBotToken: "123:abc",
+      telegramAllowFrom: "12345",
+    });
+
+    const rendered = buildOpenClawConfig(config, "gateway-token") as {
+      secrets?: { providers?: Record<string, unknown> };
+      models?: { providers?: Record<string, { apiKey?: unknown }> };
+      channels?: { telegram?: { botToken?: unknown } };
+    };
+
+    expect(rendered.secrets?.providers).toMatchObject({
+      default: { source: "env" },
+    });
+    expect(rendered.models?.providers?.openai).toBeUndefined();
+    expect(rendered.channels?.telegram?.botToken).toEqual({
+      source: "env",
+      provider: "default",
+      id: "TELEGRAM_BOT_TOKEN",
+    });
+  });
+
+  it("does not auto-generate env SecretRefs for local deploys", () => {
+    const config = makeConfig({
+      mode: "local",
+      inferenceProvider: "anthropic",
+      agentSecurityMode: "secretrefs",
+      anthropicApiKey: "sk-ant-test",
+    });
+
+    const rendered = buildOpenClawConfig(config, "gateway-token") as {
+      secrets?: { providers?: Record<string, unknown> };
+      models?: { providers?: Record<string, { apiKey?: unknown }> };
+    };
+
+    expect(rendered.secrets?.providers).toBeUndefined();
+    expect(rendered.models?.providers?.anthropic?.apiKey).toBeUndefined();
+  });
+
+  it("does not emit an invalid anthropic provider stub when Anthropic auth is configured", () => {
+    const config = makeConfig({
+      mode: "local",
+      inferenceProvider: "anthropic",
+      anthropicApiKey: "sk-ant-test",
+    });
+
+    const rendered = buildOpenClawConfig(config, "gateway-token") as {
+      models?: { providers?: Record<string, { apiKey?: unknown }> };
+    };
+
+    expect(rendered.models?.providers?.anthropic).toBeUndefined();
+  });
 });
 
 // Regression tests for #7: agent names with underscores must produce valid namespaces

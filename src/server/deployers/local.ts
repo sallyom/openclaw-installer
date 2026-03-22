@@ -7,6 +7,7 @@ import { v4 as uuid } from "uuid";
 import type {
   Deployer,
   DeployConfig,
+  DeploySecretRef,
   DeployResult,
   LogCallback,
 } from "./types.js";
@@ -145,13 +146,109 @@ function deriveModel(config: DeployConfig): string {
       ? "anthropic-vertex/claude-sonnet-4-6"
       : "google-vertex/gemini-2.5-pro";
   }
-  if (config.openaiApiKey) {
+  if (config.openaiApiKey || config.openaiApiKeyRef) {
     return "openai/gpt-5.4";
   }
   if (config.modelEndpoint) {
     return "openai/default";
   }
+  if (config.anthropicApiKey || config.anthropicApiKeyRef) {
+    return "anthropic/claude-sonnet-4-6";
+  }
   return "anthropic/claude-sonnet-4-6";
+}
+
+function cloneSecretRef(ref: DeploySecretRef): Record<string, string> {
+  return {
+    source: ref.source,
+    provider: ref.provider,
+    id: ref.id,
+  };
+}
+
+function hasSecretRef(ref?: DeploySecretRef): ref is DeploySecretRef {
+  return Boolean(ref?.source && ref.provider.trim() && ref.id.trim());
+}
+
+function parseSecretProvidersJson(raw?: string): Record<string, unknown> | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed) return undefined;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Validation happens at request time; ignore invalid values here.
+  }
+  return undefined;
+}
+
+function shouldAutoEnvRef(explicitRef: DeploySecretRef | undefined, value: string | undefined): boolean {
+  return !hasSecretRef(explicitRef) && Boolean(value?.trim());
+}
+
+function envSecretRef(id: string): DeploySecretRef {
+  return {
+    source: "env",
+    provider: "default",
+    id,
+  };
+}
+
+function attachSecretHandlingConfig(ocConfig: Record<string, unknown>, config: DeployConfig): void {
+  const providers = parseSecretProvidersJson(config.secretsProvidersJson) || {};
+  let shouldDefineDefaultEnvProvider = false;
+
+  const models = (ocConfig.models as Record<string, unknown> | undefined) || {};
+  const providersMap = (models.providers as Record<string, unknown> | undefined) || {};
+
+  const openaiApiKeyRef = hasSecretRef(config.openaiApiKeyRef)
+    ? config.openaiApiKeyRef
+    : shouldAutoEnvRef(config.openaiApiKeyRef, config.openaiApiKey)
+      ? envSecretRef("OPENAI_API_KEY")
+      : undefined;
+  if (openaiApiKeyRef) {
+    if (openaiApiKeyRef.source === "env" && openaiApiKeyRef.provider === "default") {
+      shouldDefineDefaultEnvProvider = true;
+    }
+    if (config.modelEndpoint?.trim()) {
+      const openaiProvider: Record<string, unknown> = {
+        ...((providersMap.openai as Record<string, unknown> | undefined) || {}),
+        apiKey: cloneSecretRef(openaiApiKeyRef),
+      };
+      openaiProvider.baseUrl = config.modelEndpoint.trim();
+      providersMap.openai = openaiProvider;
+    }
+  }
+
+  if (Object.keys(providersMap).length > 0) {
+    models.providers = providersMap;
+    ocConfig.models = models;
+  }
+
+  const telegramBotTokenRef = hasSecretRef(config.telegramBotTokenRef)
+    ? config.telegramBotTokenRef
+    : shouldAutoEnvRef(config.telegramBotTokenRef, config.telegramBotToken)
+      ? envSecretRef("TELEGRAM_BOT_TOKEN")
+      : undefined;
+  if (telegramBotTokenRef) {
+    if (telegramBotTokenRef.source === "env" && telegramBotTokenRef.provider === "default") {
+      shouldDefineDefaultEnvProvider = true;
+    }
+    const channels = (ocConfig.channels as Record<string, unknown> | undefined) || {};
+    const telegram = (channels.telegram as Record<string, unknown> | undefined) || {};
+    telegram.botToken = cloneSecretRef(telegramBotTokenRef);
+    channels.telegram = telegram;
+    ocConfig.channels = channels;
+  }
+
+  if (shouldDefineDefaultEnvProvider && !("default" in providers)) {
+    providers.default = { source: "env" };
+  }
+  if (Object.keys(providers).length > 0) {
+    ocConfig.secrets = { providers };
+  }
 }
 
 /**
@@ -261,7 +358,7 @@ function buildOpenClawConfig(config: DeployConfig, gatewayToken: string): string
   }
 
   // Add Telegram channel config if enabled
-  if (config.telegramBotToken && config.telegramAllowFrom) {
+  if ((config.telegramBotToken || config.telegramBotTokenRef) && config.telegramAllowFrom) {
     const allowFrom = config.telegramAllowFrom
       .split(",")
       .map((id) => parseInt(id.trim(), 10))
@@ -273,6 +370,8 @@ function buildOpenClawConfig(config: DeployConfig, gatewayToken: string): string
       },
     };
   }
+
+  attachSecretHandlingConfig(ocConfig, config);
 
   return JSON.stringify(ocConfig);
 }
@@ -421,8 +520,8 @@ function defaultAgentSourceDir(isContainerized: boolean): string | null {
 
 /**
  * Build the podman/docker run args for a given config.
- * Used by both deploy() and start() since --rm means
- * stop removes the container — start must re-create it.
+ * Used by both deploy() and start() so the same long-lived run command
+ * can be recreated consistently for local instances.
  */
 function buildRunArgs(
   config: DeployConfig,
@@ -442,7 +541,6 @@ function buildRunArgs(
   const runArgs = [
     "run",
     "-d",
-    "--rm",
     // For mutable tags (:latest/untagged), check for newer image at startup (Fix for #28)
     ...(shouldAlwaysPull(image) ? ["--pull=newer"] : []),
     "--name",
@@ -475,10 +573,10 @@ function buildRunArgs(
 
   // Fix for #6: in proxy mode the gateway talks to LiteLLM, not directly
   // to Anthropic/OpenAI, so don't expose API keys to the gateway.
-  if (!useProxy && effectiveConfig.anthropicApiKey) {
+  if (!useProxy && effectiveConfig.anthropicApiKey && !effectiveConfig.anthropicApiKeyRef) {
     env.ANTHROPIC_API_KEY = effectiveConfig.anthropicApiKey;
   }
-  if (!useProxy && effectiveConfig.openaiApiKey) {
+  if (!useProxy && effectiveConfig.openaiApiKey && !effectiveConfig.openaiApiKeyRef) {
     env.OPENAI_API_KEY = effectiveConfig.openaiApiKey;
   }
   if (effectiveConfig.modelEndpoint) {
@@ -505,7 +603,7 @@ function buildRunArgs(
     }
   }
 
-  if (effectiveConfig.telegramBotToken) {
+  if (effectiveConfig.telegramBotToken && !effectiveConfig.telegramBotTokenRef) {
     env.TELEGRAM_BOT_TOKEN = effectiveConfig.telegramBotToken;
   }
   if (effectiveConfig.sandboxEnabled) {
@@ -813,7 +911,7 @@ something that requires the user's attention.`;
 
         // Start LiteLLM in the pod
         const litellmRunResult = await runCommand(runtime, [
-          "run", "-d", "--rm",
+          "run", "-d",
           "--name", litellmName,
           "--pod", pod,
           "-v", `${vol}:/home/node/.openclaw`,
@@ -828,7 +926,7 @@ something that requires the user's attention.`;
         // Docker: start LiteLLM container, gateway will use --network=container:
         await removeContainer(runtime as ContainerRuntime, litellmName);
         const litellmRunResult = await runCommand(runtime, [
-          "run", "-d", "--rm",
+          "run", "-d",
           "--name", litellmName,
           "-p", `${port}:18789`,
           "-p", `${port + 1}:${LITELLM_PORT}`,
@@ -1099,7 +1197,7 @@ something that requires the user's attention.`;
         ], log);
 
         await runCommand(runtime, [
-          "run", "-d", "--rm",
+          "run", "-d",
           "--name", litellmName,
           "--pod", pod,
           "-v", `${vol}:/home/node/.openclaw`,
@@ -1110,7 +1208,7 @@ something that requires the user's attention.`;
       } else {
         await removeContainer(runtime as ContainerRuntime, litellmName);
         await runCommand(runtime, [
-          "run", "-d", "--rm",
+          "run", "-d",
           "--name", litellmName,
           "-p", `${port}:18789`,
           "-p", `${port + 1}:${LITELLM_PORT}`,
@@ -1281,11 +1379,23 @@ something that requires the user's attention.`;
       if (config.inferenceProvider) {
         lines.push(`INFERENCE_PROVIDER=${config.inferenceProvider}`);
       }
+      if (config.secretsProvidersJson) {
+        lines.push(`SECRETS_PROVIDERS_JSON_B64=${encodeEnvValue(config.secretsProvidersJson)}`);
+      }
+      if (config.anthropicApiKeyRef) {
+        lines.push(`ANTHROPIC_API_KEY_REF_B64=${encodeEnvValue(JSON.stringify(config.anthropicApiKeyRef))}`);
+      }
+      if (config.openaiApiKeyRef) {
+        lines.push(`OPENAI_API_KEY_REF_B64=${encodeEnvValue(JSON.stringify(config.openaiApiKeyRef))}`);
+      }
+      if (config.telegramBotTokenRef) {
+        lines.push(`TELEGRAM_BOT_TOKEN_REF_B64=${encodeEnvValue(JSON.stringify(config.telegramBotTokenRef))}`);
+      }
 
-      if (config.anthropicApiKey) {
+      if (config.anthropicApiKey && !config.anthropicApiKeyRef) {
         lines.push(`ANTHROPIC_API_KEY=${config.anthropicApiKey}`);
       }
-      if (config.openaiApiKey) {
+      if (config.openaiApiKey && !config.openaiApiKeyRef) {
         lines.push(`OPENAI_API_KEY=${config.openaiApiKey}`);
       }
       if (config.agentModel) {
@@ -1330,7 +1440,7 @@ something that requires the user's attention.`;
           lines.push(`OTEL_IMAGE=${config.otelImage}`);
         }
       }
-      if (config.telegramBotToken) {
+      if (config.telegramBotToken && !config.telegramBotTokenRef) {
         lines.push(`TELEGRAM_BOT_TOKEN=${config.telegramBotToken}`);
       }
       if (config.telegramAllowFrom) {

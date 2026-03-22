@@ -48,6 +48,16 @@ Open `http://localhost:3000`, pick **"This Machine"**, fill in the form, and hit
 
 The installer pulls the image, provisions your agent with a default identity and security guidelines, starts the container, and streams logs in real time. Your OpenClaw instance will be running at `http://localhost:18789`.
 
+## Secret Handling
+
+For local deploys, the installer now follows the upstream OpenClaw secret model by default:
+
+- secrets you enter in the form are injected into the container as environment variables
+- generated `openclaw.json` uses env-backed SecretRefs instead of storing those raw values directly
+- you can optionally provide `secrets.providers` JSON and explicit SecretRef overrides for `env`, `file`, or `exec` providers
+
+This means the container still receives the credentials it needs, but `openclaw.json` does not embed the plaintext API keys or Telegram bot token.
+
 ## SSH Sandbox
 
 If you enable **SSH sandbox backend** in the form, the installer writes OpenClaw sandbox config into `openclaw.json` and provisions the SSH material needed by the local container.

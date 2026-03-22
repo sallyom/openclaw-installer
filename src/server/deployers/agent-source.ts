@@ -36,3 +36,14 @@ export async function loadAgentSourceWorkspaceTree(agentSourceDir?: string): Pro
   if (!agentSourceDir) return [];
   return await loadTextTree(agentSourceDir);
 }
+
+export function loadAgentSourceCronJobs(agentSourceDir?: string): string | undefined {
+  if (!agentSourceDir) return undefined;
+  const cronPath = join(agentSourceDir, "cron", "jobs.json");
+  if (!existsSync(cronPath)) return undefined;
+  try {
+    return readFileSync(cronPath, "utf8");
+  } catch {
+    return undefined;
+  }
+}

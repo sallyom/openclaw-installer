@@ -2,6 +2,13 @@ import React, { useEffect, useMemo, useState } from "react";
 import { validateAgentName } from "../../shared/validate-agent-name.js";
 
 type InferenceProvider = "anthropic" | "openai" | "vertex-anthropic" | "vertex-google" | "custom-endpoint";
+type SecretRefSource = "env" | "file" | "exec";
+
+interface SecretRefValue {
+  source: SecretRefSource;
+  provider: string;
+  id: string;
+}
 
 interface DeployerInfo {
   mode: string;
@@ -45,7 +52,7 @@ interface GcpDefaults {
 interface SavedConfig {
   name: string;
   type: "local" | "k8s";
-  vars: Record<string, string>;
+  vars: Record<string, unknown>;
 }
 
 const MODE_ICONS: Record<string, string> = {
@@ -103,9 +110,33 @@ function encodeBase64(value: string): string {
   return window.btoa(value);
 }
 
+function decodeJsonBase64<T>(value: string | undefined): T | undefined {
+  const decoded = decodeBase64(value);
+  if (!decoded) return undefined;
+  try {
+    return JSON.parse(decoded) as T;
+  } catch {
+    return undefined;
+  }
+}
+
 function trimToUndefined(value: string): string | undefined {
   const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function buildSecretRef(source: string, provider: string, id: string): SecretRefValue | undefined {
+  const trimmedProvider = provider.trim();
+  const trimmedId = id.trim();
+  if (!source && !trimmedProvider && !trimmedId) return undefined;
+  if ((source !== "env" && source !== "file" && source !== "exec") || !trimmedProvider || !trimmedId) {
+    return undefined;
+  }
+  return {
+    source,
+    provider: trimmedProvider,
+    id: trimmedId,
+  } as SecretRefValue;
 }
 
 function inferAgentNameFromPath(value: string): string {
@@ -158,6 +189,16 @@ export default function DeployForm({ onDeployStarted }: Props) {
     agentName: "",
     agentDisplayName: "",
     image: "",
+    secretsProvidersJson: "",
+    anthropicApiKeyRefSource: "env",
+    anthropicApiKeyRefProvider: "default",
+    anthropicApiKeyRefId: "",
+    openaiApiKeyRefSource: "env",
+    openaiApiKeyRefProvider: "default",
+    openaiApiKeyRefId: "",
+    telegramBotTokenRefSource: "env",
+    telegramBotTokenRefProvider: "default",
+    telegramBotTokenRefId: "",
     sandboxEnabled: false,
     sandboxMode: "all",
     sandboxScope: "session",
@@ -331,9 +372,32 @@ export default function DeployForm({ onDeployStarted }: Props) {
     }
   }, [config.agentSourceDir]);
 
-  const applyVars = (vars: Record<string, string>) => {
+  const applyVars = (vars: Record<string, unknown>) => {
     // Support both local .env keys (OPENCLAW_PREFIX) and K8s JSON keys (prefix)
-    const v = (envKey: string, jsonKey: string) => vars[envKey] || vars[jsonKey] || "";
+    const v = (envKey: string, jsonKey: string) => {
+      const value = vars[envKey] ?? vars[jsonKey];
+      return typeof value === "string" ? value : "";
+    };
+    const anthropicApiKeyRef =
+      decodeJsonBase64<SecretRefValue>(vars.ANTHROPIC_API_KEY_REF_B64)
+      || (typeof (vars as Record<string, unknown>).anthropicApiKeyRef === "object"
+        ? (vars as unknown as { anthropicApiKeyRef?: SecretRefValue }).anthropicApiKeyRef
+        : undefined);
+    const openaiApiKeyRef =
+      decodeJsonBase64<SecretRefValue>(vars.OPENAI_API_KEY_REF_B64)
+      || (typeof (vars as Record<string, unknown>).openaiApiKeyRef === "object"
+        ? (vars as unknown as { openaiApiKeyRef?: SecretRefValue }).openaiApiKeyRef
+        : undefined);
+    const telegramBotTokenRef =
+      decodeJsonBase64<SecretRefValue>(vars.TELEGRAM_BOT_TOKEN_REF_B64)
+      || (typeof (vars as Record<string, unknown>).telegramBotTokenRef === "object"
+        ? (vars as unknown as { telegramBotTokenRef?: SecretRefValue }).telegramBotTokenRef
+        : undefined);
+    const savedProvidersJson =
+      decodeBase64(vars.SECRETS_PROVIDERS_JSON_B64)
+      || (typeof (vars as Record<string, unknown>).secretsProvidersJson === "string"
+        ? (vars as unknown as { secretsProvidersJson?: string }).secretsProvidersJson
+        : "");
     const explicitNamespace = v("K8S_NAMESPACE", "namespace");
 
     const savedInferenceProvider = v("INFERENCE_PROVIDER", "inferenceProvider");
@@ -350,11 +414,11 @@ export default function DeployForm({ onDeployStarted }: Props) {
       if (vertexEnabled) {
         const vp = vars.VERTEX_PROVIDER || vars.vertexProvider || "anthropic";
         setInferenceProvider(vp === "google" ? "vertex-google" : "vertex-anthropic");
-      } else if (v("MODEL_ENDPOINT", "modelEndpoint")) {
+      } else if (v("MODEL_ENDPOINT", "modelEndpoint") || openaiApiKeyRef) {
         setInferenceProvider("custom-endpoint");
-      } else if (v("ANTHROPIC_API_KEY", "anthropicApiKey")) {
+      } else if (v("ANTHROPIC_API_KEY", "anthropicApiKey") || anthropicApiKeyRef) {
         setInferenceProvider("anthropic");
-      } else if (v("OPENAI_API_KEY", "openaiApiKey")) {
+      } else if (v("OPENAI_API_KEY", "openaiApiKey") || openaiApiKeyRef) {
         setInferenceProvider("openai");
       }
     }
@@ -367,6 +431,16 @@ export default function DeployForm({ onDeployStarted }: Props) {
       agentName: v("OPENCLAW_AGENT_NAME", "agentName") || prev.agentName,
       agentDisplayName: v("OPENCLAW_DISPLAY_NAME", "agentDisplayName") || prev.agentDisplayName,
       image: v("OPENCLAW_IMAGE", "image") || prev.image,
+      secretsProvidersJson: savedProvidersJson || prev.secretsProvidersJson,
+      anthropicApiKeyRefSource: anthropicApiKeyRef?.source || prev.anthropicApiKeyRefSource,
+      anthropicApiKeyRefProvider: anthropicApiKeyRef?.provider || prev.anthropicApiKeyRefProvider,
+      anthropicApiKeyRefId: anthropicApiKeyRef?.id || prev.anthropicApiKeyRefId,
+      openaiApiKeyRefSource: openaiApiKeyRef?.source || prev.openaiApiKeyRefSource,
+      openaiApiKeyRefProvider: openaiApiKeyRef?.provider || prev.openaiApiKeyRefProvider,
+      openaiApiKeyRefId: openaiApiKeyRef?.id || prev.openaiApiKeyRefId,
+      telegramBotTokenRefSource: telegramBotTokenRef?.source || prev.telegramBotTokenRefSource,
+      telegramBotTokenRefProvider: telegramBotTokenRef?.provider || prev.telegramBotTokenRefProvider,
+      telegramBotTokenRefId: telegramBotTokenRef?.id || prev.telegramBotTokenRefId,
       sandboxEnabled:
         vars.SANDBOX_ENABLED === "true" || vars.sandboxEnabled === "true" || prev.sandboxEnabled,
       sandboxMode: v("SANDBOX_MODE", "sandboxMode") || prev.sandboxMode,
@@ -563,6 +637,15 @@ export default function DeployForm({ onDeployStarted }: Props) {
         agentName: config.agentName,
         agentDisplayName: config.agentDisplayName || config.agentName,
         image: trimToUndefined(config.image),
+        secretsProvidersJson: trimToUndefined(config.secretsProvidersJson),
+        anthropicApiKeyRef:
+          inferenceProvider === "anthropic" ? anthropicApiKeyRef : undefined,
+        openaiApiKeyRef:
+          (inferenceProvider === "openai" || inferenceProvider === "custom-endpoint")
+            ? openaiApiKeyRef
+            : undefined,
+        telegramBotTokenRef:
+          config.telegramEnabled ? telegramBotTokenRef : undefined,
         sandboxEnabled: config.sandboxEnabled || undefined,
         sandboxBackend: config.sandboxEnabled ? "ssh" : undefined,
         sandboxMode: config.sandboxEnabled ? config.sandboxMode : undefined,
@@ -601,8 +684,12 @@ export default function DeployForm({ onDeployStarted }: Props) {
           config.sandboxEnabled ? config.sandboxSshCertificate || undefined : undefined,
         sandboxSshKnownHosts:
           config.sandboxEnabled ? config.sandboxSshKnownHosts || undefined : undefined,
-        anthropicApiKey: inferenceProvider === "anthropic" ? config.anthropicApiKey || undefined : undefined,
-        openaiApiKey: (inferenceProvider === "openai" || inferenceProvider === "custom-endpoint") ? config.openaiApiKey || undefined : undefined,
+        anthropicApiKey:
+          inferenceProvider === "anthropic" && !anthropicApiKeyRef ? config.anthropicApiKey || undefined : undefined,
+        openaiApiKey:
+          (inferenceProvider === "openai" || inferenceProvider === "custom-endpoint") && !openaiApiKeyRef
+            ? config.openaiApiKey || undefined
+            : undefined,
         agentModel: config.agentModel || undefined,
         modelEndpoint: inferenceProvider === "custom-endpoint" ? trimToUndefined(config.modelEndpoint) : undefined,
         port: parseInt(config.port, 10) || 18789,
@@ -618,7 +705,8 @@ export default function DeployForm({ onDeployStarted }: Props) {
         sshUser: trimToUndefined(config.sshUser),
         agentSourceDir: trimToUndefined(config.agentSourceDir),
         telegramEnabled: config.telegramEnabled || undefined,
-        telegramBotToken: config.telegramEnabled ? trimToUndefined(config.telegramBotToken) : undefined,
+        telegramBotToken:
+          config.telegramEnabled && !telegramBotTokenRef ? trimToUndefined(config.telegramBotToken) : undefined,
         telegramAllowFrom: config.telegramEnabled ? trimToUndefined(config.telegramAllowFrom) : undefined,
         otelEnabled: config.otelEnabled || undefined,
         otelJaeger: config.otelEnabled ? config.otelJaeger || undefined : undefined,
@@ -656,8 +744,8 @@ export default function DeployForm({ onDeployStarted }: Props) {
       `AGENT_SOURCE_DIR=${config.agentSourceDir}`,
       "",
       `INFERENCE_PROVIDER=${inferenceProvider}`,
-      `ANTHROPIC_API_KEY=${config.anthropicApiKey}`,
-      `OPENAI_API_KEY=${config.openaiApiKey}`,
+      `ANTHROPIC_API_KEY=${anthropicApiKeyRef ? "" : config.anthropicApiKey}`,
+      `OPENAI_API_KEY=${openaiApiKeyRef ? "" : config.openaiApiKey}`,
       `MODEL_ENDPOINT=${config.modelEndpoint}`,
       `AGENT_MODEL=${config.agentModel}`,
       "",
@@ -690,7 +778,7 @@ export default function DeployForm({ onDeployStarted }: Props) {
       `SANDBOX_TOOL_ALLOW_MESSAGING=${config.sandboxToolAllowMessaging}`,
       "",
       `TELEGRAM_ENABLED=${config.telegramEnabled}`,
-      `TELEGRAM_BOT_TOKEN=${config.telegramBotToken}`,
+      `TELEGRAM_BOT_TOKEN=${telegramBotTokenRef ? "" : config.telegramBotToken}`,
       `TELEGRAM_ALLOW_FROM=${config.telegramAllowFrom}`,
       `OTEL_ENABLED=${config.otelEnabled}`,
       `OTEL_JAEGER=${config.otelJaeger}`,
@@ -705,6 +793,18 @@ export default function DeployForm({ onDeployStarted }: Props) {
     }
     if (config.sandboxSshKnownHosts && !config.sandboxSshKnownHostsPath) {
       lines.push(`SANDBOX_SSH_KNOWN_HOSTS_B64=${encodeBase64(config.sandboxSshKnownHosts)}`);
+    }
+    if (config.secretsProvidersJson.trim()) {
+      lines.push(`SECRETS_PROVIDERS_JSON_B64=${encodeBase64(config.secretsProvidersJson)}`);
+    }
+    if (anthropicApiKeyRef) {
+      lines.push(`ANTHROPIC_API_KEY_REF_B64=${encodeBase64(JSON.stringify(anthropicApiKeyRef))}`);
+    }
+    if (openaiApiKeyRef) {
+      lines.push(`OPENAI_API_KEY_REF_B64=${encodeBase64(JSON.stringify(openaiApiKeyRef))}`);
+    }
+    if (telegramBotTokenRef) {
+      lines.push(`TELEGRAM_BOT_TOKEN_REF_B64=${encodeBase64(JSON.stringify(telegramBotTokenRef))}`);
     }
 
     const text = lines.join("\n") + "\n";
@@ -728,6 +828,21 @@ export default function DeployForm({ onDeployStarted }: Props) {
     || config.sandboxToolAllowAutomation
     || config.sandboxToolAllowMessaging;
 
+  const anthropicApiKeyRef = buildSecretRef(
+    config.anthropicApiKeyRefSource,
+    config.anthropicApiKeyRefProvider,
+    config.anthropicApiKeyRefId,
+  );
+  const openaiApiKeyRef = buildSecretRef(
+    config.openaiApiKeyRefSource,
+    config.openaiApiKeyRefProvider,
+    config.openaiApiKeyRefId,
+  );
+  const telegramBotTokenRef = buildSecretRef(
+    config.telegramBotTokenRefSource,
+    config.telegramBotTokenRefProvider,
+    config.telegramBotTokenRefId,
+  );
   const agentNameError = validateAgentName(config.agentName);
   const validationErrors: string[] = [];
   if (!config.agentName.trim()) {
@@ -743,6 +858,25 @@ export default function DeployForm({ onDeployStarted }: Props) {
   }
   if (isClusterMode && !defaults?.k8sAvailable) {
     validationErrors.push("No Kubernetes cluster detected.");
+  }
+  if (config.secretsProvidersJson.trim()) {
+    try {
+      const parsed = JSON.parse(config.secretsProvidersJson);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        validationErrors.push("Secret providers JSON must be a JSON object.");
+      }
+    } catch {
+      validationErrors.push("Secret providers JSON is invalid.");
+    }
+  }
+  if (config.anthropicApiKeyRefId.trim() && !anthropicApiKeyRef) {
+    validationErrors.push("Anthropic SecretRef requires source, provider, and id.");
+  }
+  if (config.openaiApiKeyRefId.trim() && !openaiApiKeyRef) {
+    validationErrors.push("OpenAI SecretRef requires source, provider, and id.");
+  }
+  if (config.telegramBotTokenRefId.trim() && !telegramBotTokenRef) {
+    validationErrors.push("Telegram SecretRef requires source, provider, and id.");
   }
 
   const isValid = validationErrors.length === 0;
@@ -884,22 +1018,6 @@ export default function DeployForm({ onDeployStarted }: Props) {
           />
         </div>
 
-        {mode === "local" && (
-          <div className="form-group">
-            <label>Agent Source Directory</label>
-            <input
-              type="text"
-              placeholder="/path/to/agents-dir (optional)"
-              value={config.agentSourceDir}
-              onChange={(e) => update("agentSourceDir", e.target.value)}
-            />
-            <div className="hint">
-              Host directory with <code>workspace-*</code>, <code>skills/</code>, and <code>cron/jobs.json</code> to provision into the instance.
-              Defaults to <code>~/.openclaw/</code> if it exists.
-            </div>
-          </div>
-        )}
-
         <div className="form-group">
           <label>Container Image</label>
           <input
@@ -912,269 +1030,6 @@ export default function DeployForm({ onDeployStarted }: Props) {
             Leave blank for the default image (<code>{defaultImageForProvider(inferenceProvider)}</code>).
           </div>
         </div>
-
-        <h3 style={{ marginTop: "1.5rem" }}>Sandbox</h3>
-
-        <div className="form-group">
-          <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-            <input
-              type="checkbox"
-              checked={config.sandboxEnabled}
-              onChange={(e) =>
-                setConfig((prev) => ({ ...prev, sandboxEnabled: e.target.checked }))
-              }
-            />
-            Enable SSH sandbox backend
-          </label>
-          <div className="hint">
-            Recommended path for this installer on both local containers and Kubernetes.
-          </div>
-        </div>
-
-        {config.sandboxEnabled && (
-          <>
-            <div className="form-row">
-              <div className="form-group">
-                <label>Sandbox Mode</label>
-                <select
-                  value={config.sandboxMode}
-                  onChange={(e) => update("sandboxMode", e.target.value)}
-                >
-                  <option value="all">all</option>
-                  <option value="non-main">non-main</option>
-                  <option value="off">off</option>
-                </select>
-              </div>
-              <div className="form-group">
-                <label>Sandbox Scope</label>
-                <select
-                  value={config.sandboxScope}
-                  onChange={(e) => update("sandboxScope", e.target.value)}
-                >
-                  <option value="session">session</option>
-                  <option value="agent">agent</option>
-                  <option value="shared">shared</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="form-row">
-              <div className="form-group">
-                <label>Workspace Access</label>
-                <select
-                  value={config.sandboxWorkspaceAccess}
-                  onChange={(e) => update("sandboxWorkspaceAccess", e.target.value)}
-                >
-                  <option value="rw">rw</option>
-                  <option value="ro">ro</option>
-                  <option value="none">none</option>
-                </select>
-              </div>
-              <div className="form-group">
-                <label>Remote Workspace Root</label>
-                <input
-                  type="text"
-                  placeholder="/tmp/openclaw-sandboxes"
-                  value={config.sandboxSshWorkspaceRoot}
-                  onChange={(e) => update("sandboxSshWorkspaceRoot", e.target.value)}
-                />
-              </div>
-            </div>
-
-            <div className="form-group">
-              <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                <input
-                  type="checkbox"
-                  checked={config.sandboxToolPolicyEnabled}
-                  onChange={(e) =>
-                    setConfig((prev) => ({ ...prev, sandboxToolPolicyEnabled: e.target.checked }))
-                  }
-                />
-                Customize sandbox tool baseline
-              </label>
-              <div className="hint">
-                Optional persistent baseline for sandboxed tools. This is intentionally much smaller than the full gateway UI.
-              </div>
-            </div>
-
-            {config.sandboxToolPolicyEnabled && (
-              <div className="form-row" style={{ flexWrap: "wrap", gap: "1rem 1.5rem", marginBottom: "1rem" }}>
-                <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                  <input
-                    type="checkbox"
-                    checked={config.sandboxToolAllowFiles}
-                    onChange={(e) =>
-                      setConfig((prev) => ({ ...prev, sandboxToolAllowFiles: e.target.checked }))
-                    }
-                  />
-                  File tools
-                </label>
-                <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                  <input
-                    type="checkbox"
-                    checked={config.sandboxToolAllowSessions}
-                    onChange={(e) =>
-                      setConfig((prev) => ({ ...prev, sandboxToolAllowSessions: e.target.checked }))
-                    }
-                  />
-                  Session tools
-                </label>
-                <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                  <input
-                    type="checkbox"
-                    checked={config.sandboxToolAllowMemory}
-                    onChange={(e) =>
-                      setConfig((prev) => ({ ...prev, sandboxToolAllowMemory: e.target.checked }))
-                    }
-                  />
-                  Memory tools
-                </label>
-                <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                  <input
-                    type="checkbox"
-                    checked={config.sandboxToolAllowRuntime}
-                    onChange={(e) =>
-                      setConfig((prev) => ({ ...prev, sandboxToolAllowRuntime: e.target.checked }))
-                    }
-                  />
-                  Runtime tools (`exec`, `bash`, `process`)
-                </label>
-                <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                  <input
-                    type="checkbox"
-                    checked={config.sandboxToolAllowBrowser}
-                    onChange={(e) =>
-                      setConfig((prev) => ({ ...prev, sandboxToolAllowBrowser: e.target.checked }))
-                    }
-                  />
-                  Browser and canvas
-                </label>
-                <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                  <input
-                    type="checkbox"
-                    checked={config.sandboxToolAllowAutomation}
-                    onChange={(e) =>
-                      setConfig((prev) => ({ ...prev, sandboxToolAllowAutomation: e.target.checked }))
-                    }
-                  />
-                  Automation tools
-                </label>
-                <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                  <input
-                    type="checkbox"
-                    checked={config.sandboxToolAllowMessaging}
-                    onChange={(e) =>
-                      setConfig((prev) => ({ ...prev, sandboxToolAllowMessaging: e.target.checked }))
-                    }
-                  />
-                  Messaging tools
-                </label>
-              </div>
-            )}
-
-            <div className="form-group">
-              <label>SSH Target</label>
-              <input
-                type="text"
-                placeholder="user@gateway-host:22"
-                value={config.sandboxSshTarget}
-                onChange={(e) => update("sandboxSshTarget", e.target.value)}
-              />
-              <div className="hint">
-                Required. OpenClaw will run sandboxed tools on this remote host.
-              </div>
-            </div>
-
-            <div className="form-row">
-              <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                <input
-                  type="checkbox"
-                  checked={config.sandboxSshStrictHostKeyChecking}
-                  onChange={(e) =>
-                    setConfig((prev) => ({
-                      ...prev,
-                      sandboxSshStrictHostKeyChecking: e.target.checked,
-                    }))}
-                />
-                Strict host key checking
-              </label>
-              <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                <input
-                  type="checkbox"
-                  checked={config.sandboxSshUpdateHostKeys}
-                  onChange={(e) =>
-                    setConfig((prev) => ({
-                      ...prev,
-                      sandboxSshUpdateHostKeys: e.target.checked,
-                    }))}
-                />
-                Update host keys
-              </label>
-            </div>
-
-            <div className="form-group">
-              <label>
-                SSH Private Key
-                <span style={{ color: "var(--text-secondary)", fontWeight: "normal" }}>
-                  {" "}(optional)
-                </span>
-              </label>
-              <input
-                type="text"
-                placeholder="/path/to/id_ed25519"
-                value={config.sandboxSshIdentityPath}
-                onChange={(e) => update("sandboxSshIdentityPath", e.target.value)}
-              />
-              <div className="hint">Path on the installer host to the private key file.</div>
-            </div>
-
-            <div className="form-group">
-              <label>
-                SSH Certificate
-                <span style={{ color: "var(--text-secondary)", fontWeight: "normal" }}>
-                  {" "}(optional)
-                </span>
-              </label>
-              <input
-                type="text"
-                placeholder="/path/to/id_ed25519-cert.pub"
-                value={config.sandboxSshCertificatePath}
-                onChange={(e) => update("sandboxSshCertificatePath", e.target.value)}
-                style={{ marginBottom: "0.5rem" }}
-              />
-              <textarea
-                rows={4}
-                placeholder="ssh-ed25519-cert-v01@openssh.com ..."
-                value={config.sandboxSshCertificate}
-                onChange={(e) => update("sandboxSshCertificate", e.target.value)}
-              />
-              <div className="hint">Type a path on the installer host, or paste the certificate directly.</div>
-            </div>
-
-            <div className="form-group">
-              <label>
-                Known Hosts
-                <span style={{ color: "var(--text-secondary)", fontWeight: "normal" }}>
-                  {" "}(optional)
-                </span>
-              </label>
-              <input
-                type="text"
-                placeholder="/path/to/known_hosts"
-                value={config.sandboxSshKnownHostsPath}
-                onChange={(e) => update("sandboxSshKnownHostsPath", e.target.value)}
-                style={{ marginBottom: "0.5rem" }}
-              />
-              <textarea
-                rows={4}
-                placeholder="gateway-host ssh-ed25519 AAAA..."
-                value={config.sandboxSshKnownHosts}
-                onChange={(e) => update("sandboxSshKnownHosts", e.target.value)}
-              />
-              <div className="hint">Type a path on the installer host, or paste known_hosts entries directly.</div>
-            </div>
-          </>
-        )}
 
         {isClusterMode && (
           <div className="form-group">
@@ -1219,6 +1074,68 @@ export default function DeployForm({ onDeployStarted }: Props) {
           </div>
         )}
 
+        <details style={{ marginTop: "1.5rem" }}>
+          <summary style={{ cursor: "pointer", fontWeight: 600 }}>
+            Agent Options
+            <span style={{ color: "var(--text-secondary)", fontWeight: "normal" }}>
+              {" "}Optional: source directory, cron jobs, subagent spawning
+            </span>
+          </summary>
+
+          <div className="card" style={{ marginTop: "0.75rem" }}>
+            <div className="form-group">
+              <label>Agent Source Directory</label>
+              <input
+                type="text"
+                placeholder="/path/to/agents-dir (optional)"
+                value={config.agentSourceDir}
+                onChange={(e) => update("agentSourceDir", e.target.value)}
+              />
+              <div className="hint">
+                Installer host directory with <code>workspace-*</code>, <code>skills/</code>, and optional <code>cron/jobs.json</code> to provision into the instance.
+                Defaults to <code>~/.openclaw/</code> if it exists.
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <input
+                  type="checkbox"
+                  checked={config.cronEnabled}
+                  onChange={(e) =>
+                    setConfig((prev) => ({ ...prev, cronEnabled: e.target.checked }))
+                  }
+                  style={{ width: "auto" }}
+                />
+                Enable Cron Jobs
+              </label>
+              <div className="hint">
+                Scheduled jobs are loaded from <code>cron/jobs.json</code> in the Agent Source Directory when present.
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label>Subagent Spawning</label>
+              <select
+                value={config.subagentPolicy}
+                onChange={(e) =>
+                  setConfig((prev) => ({
+                    ...prev,
+                    subagentPolicy: e.target.value as "none" | "self" | "unrestricted",
+                  }))
+                }
+              >
+                <option value="none">Disabled</option>
+                <option value="self">Same agent only (self-delegation)</option>
+                <option value="unrestricted">Unrestricted (any agent)</option>
+              </select>
+              <div className="hint">
+                Controls whether the agent can spawn subagents.
+              </div>
+            </div>
+          </div>
+        </details>
+
         {mode === "local" && (
           <div className="form-group">
             <label>Port</label>
@@ -1254,6 +1171,25 @@ export default function DeployForm({ onDeployStarted }: Props) {
             </div>
           </div>
         )}
+
+        <div className="form-group">
+          <div className="hint">
+            Any credentials you enter in this form are handled using OpenClaw&apos;s SecretRef support.
+            The installer injects them using the safest built-in path for your target instead of writing them
+            directly into <code>openclaw.json</code>.
+            {isClusterMode
+              ? " For Kubernetes, they are stored in the installer-managed Kubernetes Secret and referenced automatically."
+              : " On local installs, they are injected as container environment variables and referenced automatically."}
+            {" "}
+            <a
+              href="https://docs.openclaw.ai/reference/secretref-credential-surface"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Learn more
+            </a>.
+          </div>
+        </div>
 
         <h3 style={{ marginTop: "1.5rem" }}>Inference Provider</h3>
 
@@ -1660,50 +1596,406 @@ export default function DeployForm({ onDeployStarted }: Props) {
                   : <>Comma-separated user IDs. Find yours via <a href="https://t.me/userinfobot" target="_blank" rel="noreferrer">@userinfobot</a></>}
               </div>
             </div>
+
           </>
         )}
 
-        <h3 style={{ marginTop: "1.5rem" }}>Agent Security</h3>
+        <h3 style={{ marginTop: "1.5rem" }}>Sandbox</h3>
 
         <div className="form-group">
-          <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
             <input
               type="checkbox"
-              checked={config.cronEnabled}
+              checked={config.sandboxEnabled}
               onChange={(e) =>
-                setConfig((prev) => ({ ...prev, cronEnabled: e.target.checked }))
+                setConfig((prev) => ({ ...prev, sandboxEnabled: e.target.checked }))
               }
-              style={{ width: "auto" }}
             />
-            Enable cron jobs
+            Enable SSH sandbox backend
           </label>
           <div className="hint">
-            Allow the agent to create and run scheduled tasks.
-            Most use cases don't require this, and it is a known risk vector
-            (agents can modify their own schedules).
+            Recommended path for this installer on both local containers and Kubernetes.
           </div>
         </div>
 
-        <div className="form-group">
-          <label>Subagent spawning</label>
-          <select
-            value={config.subagentPolicy}
-            onChange={(e) =>
-              setConfig((prev) => ({
-                ...prev,
-                subagentPolicy: e.target.value as "none" | "self" | "unrestricted",
-              }))
-            }
-          >
-            <option value="none">Disabled</option>
-            <option value="self">Same agent only (self-delegation)</option>
-            <option value="unrestricted">Unrestricted (any agent)</option>
-          </select>
-          <div className="hint">
-            Controls whether the agent can spawn subagents.
-            "Unrestricted" allows spawning any agent, which increases attack surface.
+        {config.sandboxEnabled && (
+          <>
+            <div className="form-row">
+              <div className="form-group">
+                <label>Sandbox Mode</label>
+                <select
+                  value={config.sandboxMode}
+                  onChange={(e) => update("sandboxMode", e.target.value)}
+                >
+                  <option value="all">all</option>
+                  <option value="non-main">non-main</option>
+                  <option value="off">off</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label>Sandbox Scope</label>
+                <select
+                  value={config.sandboxScope}
+                  onChange={(e) => update("sandboxScope", e.target.value)}
+                >
+                  <option value="session">session</option>
+                  <option value="agent">agent</option>
+                  <option value="shared">shared</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="form-row">
+              <div className="form-group">
+                <label>Workspace Access</label>
+                <select
+                  value={config.sandboxWorkspaceAccess}
+                  onChange={(e) => update("sandboxWorkspaceAccess", e.target.value)}
+                >
+                  <option value="rw">rw</option>
+                  <option value="ro">ro</option>
+                  <option value="none">none</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label>Remote Workspace Root</label>
+                <input
+                  type="text"
+                  placeholder="/tmp/openclaw-sandboxes"
+                  value={config.sandboxSshWorkspaceRoot}
+                  onChange={(e) => update("sandboxSshWorkspaceRoot", e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                <input
+                  type="checkbox"
+                  checked={config.sandboxToolPolicyEnabled}
+                  onChange={(e) =>
+                    setConfig((prev) => ({ ...prev, sandboxToolPolicyEnabled: e.target.checked }))
+                  }
+                />
+                Customize sandbox tool baseline
+              </label>
+              <div className="hint">
+                Optional persistent baseline for sandboxed tools. This is intentionally much smaller than the full gateway UI.
+              </div>
+            </div>
+
+            {config.sandboxToolPolicyEnabled && (
+              <div className="form-row" style={{ flexWrap: "wrap", gap: "1rem 1.5rem", marginBottom: "1rem" }}>
+                <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={config.sandboxToolAllowFiles}
+                    onChange={(e) =>
+                      setConfig((prev) => ({ ...prev, sandboxToolAllowFiles: e.target.checked }))
+                    }
+                  />
+                  File tools
+                </label>
+                <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={config.sandboxToolAllowSessions}
+                    onChange={(e) =>
+                      setConfig((prev) => ({ ...prev, sandboxToolAllowSessions: e.target.checked }))
+                    }
+                  />
+                  Session tools
+                </label>
+                <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={config.sandboxToolAllowMemory}
+                    onChange={(e) =>
+                      setConfig((prev) => ({ ...prev, sandboxToolAllowMemory: e.target.checked }))
+                    }
+                  />
+                  Memory tools
+                </label>
+                <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={config.sandboxToolAllowRuntime}
+                    onChange={(e) =>
+                      setConfig((prev) => ({ ...prev, sandboxToolAllowRuntime: e.target.checked }))
+                    }
+                  />
+                  Runtime tools (`exec`, `bash`, `process`)
+                </label>
+                <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={config.sandboxToolAllowBrowser}
+                    onChange={(e) =>
+                      setConfig((prev) => ({ ...prev, sandboxToolAllowBrowser: e.target.checked }))
+                    }
+                  />
+                  Browser and canvas
+                </label>
+                <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={config.sandboxToolAllowAutomation}
+                    onChange={(e) =>
+                      setConfig((prev) => ({ ...prev, sandboxToolAllowAutomation: e.target.checked }))
+                    }
+                  />
+                  Automation tools
+                </label>
+                <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={config.sandboxToolAllowMessaging}
+                    onChange={(e) =>
+                      setConfig((prev) => ({ ...prev, sandboxToolAllowMessaging: e.target.checked }))
+                    }
+                  />
+                  Messaging tools
+                </label>
+              </div>
+            )}
+
+            <div className="form-group">
+              <label>SSH Target</label>
+              <input
+                type="text"
+                placeholder="user@gateway-host:22"
+                value={config.sandboxSshTarget}
+                onChange={(e) => update("sandboxSshTarget", e.target.value)}
+              />
+              <div className="hint">
+                Required. OpenClaw will run sandboxed tools on this remote host.
+              </div>
+            </div>
+
+            <div className="form-row">
+              <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                <input
+                  type="checkbox"
+                  checked={config.sandboxSshStrictHostKeyChecking}
+                  onChange={(e) =>
+                    setConfig((prev) => ({
+                      ...prev,
+                      sandboxSshStrictHostKeyChecking: e.target.checked,
+                    }))}
+                />
+                Strict host key checking
+              </label>
+              <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                <input
+                  type="checkbox"
+                  checked={config.sandboxSshUpdateHostKeys}
+                  onChange={(e) =>
+                    setConfig((prev) => ({
+                      ...prev,
+                      sandboxSshUpdateHostKeys: e.target.checked,
+                    }))}
+                />
+                Update host keys
+              </label>
+            </div>
+
+            <div className="form-group">
+              <label>
+                SSH Private Key
+                <span style={{ color: "var(--text-secondary)", fontWeight: "normal" }}>
+                  {" "}(optional)
+                </span>
+              </label>
+              <input
+                type="text"
+                placeholder="/path/to/id_ed25519"
+                value={config.sandboxSshIdentityPath}
+                onChange={(e) => update("sandboxSshIdentityPath", e.target.value)}
+              />
+              <div className="hint">Path on the installer host to the private key file.</div>
+            </div>
+
+            <div className="form-group">
+              <label>
+                SSH Certificate
+                <span style={{ color: "var(--text-secondary)", fontWeight: "normal" }}>
+                  {" "}(optional)
+                </span>
+              </label>
+              <input
+                type="text"
+                placeholder="/path/to/id_ed25519-cert.pub"
+                value={config.sandboxSshCertificatePath}
+                onChange={(e) => update("sandboxSshCertificatePath", e.target.value)}
+                style={{ marginBottom: "0.5rem" }}
+              />
+              <textarea
+                rows={4}
+                placeholder="ssh-ed25519-cert-v01@openssh.com ..."
+                value={config.sandboxSshCertificate}
+                onChange={(e) => update("sandboxSshCertificate", e.target.value)}
+              />
+              <div className="hint">Type a path on the installer host, or paste the certificate directly.</div>
+            </div>
+
+            <div className="form-group">
+              <label>
+                Known Hosts
+                <span style={{ color: "var(--text-secondary)", fontWeight: "normal" }}>
+                  {" "}(optional)
+                </span>
+              </label>
+              <input
+                type="text"
+                placeholder="/path/to/known_hosts"
+                value={config.sandboxSshKnownHostsPath}
+                onChange={(e) => update("sandboxSshKnownHostsPath", e.target.value)}
+                style={{ marginBottom: "0.5rem" }}
+              />
+              <textarea
+                rows={4}
+                placeholder="gateway-host ssh-ed25519 AAAA..."
+                value={config.sandboxSshKnownHosts}
+                onChange={(e) => update("sandboxSshKnownHosts", e.target.value)}
+              />
+              <div className="hint">Type a path on the installer host, or paste known_hosts entries directly.</div>
+            </div>
+          </>
+        )}
+
+        <details style={{ marginTop: "1.5rem" }}>
+          <summary style={{ cursor: "pointer", fontWeight: 600 }}>Advanced: Experimental External Secret Providers</summary>
+          <div className="card" style={{ marginTop: "0.75rem" }}>
+            <div className="hint" style={{ marginBottom: "0.75rem" }}>
+              Only use this if your secrets come from an external provider such as Vault, a mounted file,
+              or a custom command. Most users should leave this closed and just enter credentials in the normal fields above.
+            </div>
+            <div className="form-group">
+              <label>Secret Providers JSON (optional)</label>
+              <textarea
+                rows={6}
+                placeholder={`{\n  "default": { "source": "env" },\n  "vault_openai": {\n    "source": "exec",\n    "command": "/usr/local/bin/vault",\n    "args": ["kv", "get", "-field=OPENAI_API_KEY", "secret/openclaw"],\n    "passEnv": ["VAULT_ADDR", "VAULT_TOKEN"]\n  }\n}`}
+                value={config.secretsProvidersJson}
+                onChange={(e) => update("secretsProvidersJson", e.target.value)}
+              />
+              <div className="hint">
+                Optional <code>secrets.providers</code> object. Runtime prerequisites still need to exist
+                inside the OpenClaw environment.
+              </div>
+            </div>
+
+            <div className="card" style={{ marginBottom: "1rem" }}>
+              <div className="form-row">
+                <div className="form-group">
+                  <label>Anthropic SecretRef Source</label>
+                  <select
+                    value={config.anthropicApiKeyRefSource}
+                    onChange={(e) => update("anthropicApiKeyRefSource", e.target.value)}
+                  >
+                    <option value="env">env</option>
+                    <option value="file">file</option>
+                    <option value="exec">exec</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>Anthropic SecretRef Provider</label>
+                  <input
+                    type="text"
+                    placeholder="default"
+                    value={config.anthropicApiKeyRefProvider}
+                    onChange={(e) => update("anthropicApiKeyRefProvider", e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="form-group">
+                <label>Anthropic SecretRef ID</label>
+                <input
+                  type="text"
+                  placeholder="ANTHROPIC_API_KEY or /providers/anthropic/apiKey or providers/anthropic/apiKey"
+                  value={config.anthropicApiKeyRefId}
+                  onChange={(e) => update("anthropicApiKeyRefId", e.target.value)}
+                />
+                <div className="hint">
+                  Optional override. Leave blank to use the installer-managed env-backed SecretRef automatically.
+                </div>
+              </div>
+            </div>
+
+            <div className="card" style={{ marginBottom: "1rem" }}>
+              <div className="form-row">
+                <div className="form-group">
+                  <label>OpenAI SecretRef Source</label>
+                  <select
+                    value={config.openaiApiKeyRefSource}
+                    onChange={(e) => update("openaiApiKeyRefSource", e.target.value)}
+                  >
+                    <option value="env">env</option>
+                    <option value="file">file</option>
+                    <option value="exec">exec</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>OpenAI SecretRef Provider</label>
+                  <input
+                    type="text"
+                    placeholder="default"
+                    value={config.openaiApiKeyRefProvider}
+                    onChange={(e) => update("openaiApiKeyRefProvider", e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="form-group">
+                <label>OpenAI SecretRef ID</label>
+                <input
+                  type="text"
+                  placeholder="OPENAI_API_KEY or /providers/openai/apiKey or providers/openai/apiKey"
+                  value={config.openaiApiKeyRefId}
+                  onChange={(e) => update("openaiApiKeyRefId", e.target.value)}
+                />
+                <div className="hint">
+                  Optional override. Leave blank to use the installer-managed env-backed SecretRef automatically.
+                </div>
+              </div>
+            </div>
+
+            <div className="card" style={{ marginBottom: "1rem" }}>
+              <div className="form-row">
+                <div className="form-group">
+                  <label>Telegram SecretRef Source</label>
+                  <select
+                    value={config.telegramBotTokenRefSource}
+                    onChange={(e) => update("telegramBotTokenRefSource", e.target.value)}
+                  >
+                    <option value="env">env</option>
+                    <option value="file">file</option>
+                    <option value="exec">exec</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>Telegram SecretRef Provider</label>
+                  <input
+                    type="text"
+                    placeholder="default"
+                    value={config.telegramBotTokenRefProvider}
+                    onChange={(e) => update("telegramBotTokenRefProvider", e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="form-group">
+                <label>Telegram SecretRef ID</label>
+                <input
+                  type="text"
+                  placeholder="TELEGRAM_BOT_TOKEN or /channels/telegram/botToken or channels/telegram/botToken"
+                  value={config.telegramBotTokenRefId}
+                  onChange={(e) => update("telegramBotTokenRefId", e.target.value)}
+                />
+                <div className="hint">
+                  Optional override. Leave blank to use the installer-managed env-backed SecretRef automatically.
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
+        </details>
 
         <div style={{ marginTop: "1.5rem" }}>
           {!isValid && (

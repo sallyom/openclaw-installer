@@ -13,7 +13,7 @@ import { discoverK8sInstances } from "../deployers/kubernetes.js";
 import { isClusterReachable } from "../services/k8s.js";
 import { registry } from "../deployers/registry.js";
 import { createLogCallback, sendStatus } from "../ws.js";
-import type { DeployResult } from "../deployers/types.js";
+import type { DeployResult, DeploySecretRef } from "../deployers/types.js";
 
 const router = Router();
 
@@ -60,6 +60,18 @@ function decodeSavedBase64(value?: string): string | undefined {
   }
   try {
     return Buffer.from(value, "base64").toString("utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+function decodeSavedJson<T>(value?: string): T | undefined {
+  const decoded = decodeSavedBase64(value);
+  if (!decoded) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(decoded) as T;
   } catch {
     return undefined;
   }
@@ -115,6 +127,12 @@ router.get("/", async (req, res) => {
                 | "vertex-google"
                 | "custom-endpoint"
                 | undefined,
+              agentSecurityMode:
+                (savedVars.AGENT_SECURITY_MODE as "basic" | "secretrefs") || undefined,
+              secretsProvidersJson: decodeSavedBase64(savedVars.SECRETS_PROVIDERS_JSON_B64),
+              anthropicApiKeyRef: decodeSavedJson<DeploySecretRef>(savedVars.ANTHROPIC_API_KEY_REF_B64),
+              openaiApiKeyRef: decodeSavedJson<DeploySecretRef>(savedVars.OPENAI_API_KEY_REF_B64),
+              telegramBotTokenRef: decodeSavedJson<DeploySecretRef>(savedVars.TELEGRAM_BOT_TOKEN_REF_B64),
               anthropicApiKey: savedVars.ANTHROPIC_API_KEY || undefined,
               openaiApiKey: savedVars.OPENAI_API_KEY || undefined,
               telegramBotToken: savedVars.TELEGRAM_BOT_TOKEN || undefined,
@@ -706,6 +724,12 @@ async function findInstance(name: string): Promise<DeployResult | null> {
             | "vertex-google"
             | "custom-endpoint"
             | undefined,
+          agentSecurityMode:
+            (savedVars.AGENT_SECURITY_MODE as "basic" | "secretrefs") || undefined,
+          secretsProvidersJson: decodeSavedBase64(savedVars.SECRETS_PROVIDERS_JSON_B64),
+          anthropicApiKeyRef: decodeSavedJson<DeploySecretRef>(savedVars.ANTHROPIC_API_KEY_REF_B64),
+          openaiApiKeyRef: decodeSavedJson<DeploySecretRef>(savedVars.OPENAI_API_KEY_REF_B64),
+          telegramBotTokenRef: decodeSavedJson<DeploySecretRef>(savedVars.TELEGRAM_BOT_TOKEN_REF_B64),
           anthropicApiKey: savedVars.ANTHROPIC_API_KEY || undefined,
           openaiApiKey: savedVars.OPENAI_API_KEY || undefined,
           agentModel: savedVars.AGENT_MODEL || undefined,
