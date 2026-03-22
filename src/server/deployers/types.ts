@@ -88,6 +88,7 @@ export interface DeployResult {
   startedAt: string;
   url?: string;
   containerId?: string;
+  volumeName?: string;
   error?: string;
   // K8s-specific
   statusDetail?: string;

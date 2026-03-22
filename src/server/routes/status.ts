@@ -100,6 +100,7 @@ router.get("/", async (req, res) => {
             id: vol.containerName,
             mode: "local",
             status: "stopped",
+            volumeName: vol.name,
             config: {
               mode: "local",
               prefix,
@@ -689,6 +690,7 @@ async function findInstance(name: string): Promise<DeployResult | null> {
         id: name,
         mode: "local",
         status: "stopped",
+        volumeName: vol.name,
         config: {
           mode: "local",
           prefix,

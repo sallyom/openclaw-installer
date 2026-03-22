@@ -1394,7 +1394,8 @@ something that requires the user's attention.`;
     if (!runtime) throw new Error("No container runtime found");
 
     const name = result.containerId ?? containerName(result.config);
-    const vol = volumeName(result.config);
+    // Use actual discovered volume name when available (fixes #24)
+    const vol = result.volumeName ?? volumeName(result.config);
     const image = resolveImage(result.config);
     const agentId = `${result.config.prefix || "openclaw"}_${result.config.agentName}`;
     const workspaceDir = `/home/node/.openclaw/workspace-${agentId}`;
@@ -1533,7 +1534,9 @@ something that requires the user's attention.`;
       }
     }
 
-    const vol = volumeName(result.config);
+    // Use the actual discovered volume name when available (fixes #24:
+    // reconstructed config produces wrong name when saved config is missing)
+    const vol = result.volumeName ?? volumeName(result.config);
     log(`Deleting data volume: ${vol}`);
     await removeVolume(runtime, vol);
     log("All data deleted.");
