@@ -28,7 +28,7 @@ describe("LocalDeployer.teardown — volume name resolution (issue #24)", () => 
   beforeEach(() => {
     vi.clearAllMocks();
     // Default: make execFileAsync calls resolve (for pod rm etc.)
-    mockExecFile.mockImplementation((_file: string, _args: string[], cb?: Function) => {
+    mockExecFile.mockImplementation((_file: string, _args: string[], cb?: (...args: unknown[]) => void) => {
       if (cb) {
         cb(null, { stdout: "", stderr: "" });
       }
