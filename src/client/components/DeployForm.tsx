@@ -1678,7 +1678,9 @@ export default function DeployForm({ onDeployStarted }: Props) {
                 <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.5rem" }}>
                   <input
                     type="text"
-                    placeholder="Name (e.g. github)"
+                    name={`cred-name-${idx}`}
+                    aria-label={`Credential ${idx + 1} name`}
+                    placeholder={"Name (e.g. github)\u2026"}
                     value={cred.name}
                     onChange={(e) => {
                       const val = e.target.value;
@@ -1692,6 +1694,7 @@ export default function DeployForm({ onDeployStarted }: Props) {
                   />
                   <button
                     type="button"
+                    aria-label={`Remove credential ${cred.name || idx + 1}`}
                     onClick={() => {
                       setConfig((prev) => ({
                         ...prev,
@@ -1712,8 +1715,11 @@ export default function DeployForm({ onDeployStarted }: Props) {
                 </div>
                 <input
                   type="password"
+                  name={`cred-secret-${idx}`}
+                  aria-label={`Credential ${cred.name || idx + 1} secret`}
                   autoComplete="new-password"
-                  placeholder="API key or token"
+                  spellCheck={false}
+                  placeholder={"API key or token\u2026"}
                   value={cred.secret}
                   onChange={(e) => {
                     const val = e.target.value;
@@ -1727,7 +1733,9 @@ export default function DeployForm({ onDeployStarted }: Props) {
                 />
                 <input
                   type="text"
-                  placeholder="api.github.com, api.stripe.com"
+                  name={`cred-hosts-${idx}`}
+                  aria-label={`Credential ${cred.name || idx + 1} allowed hosts`}
+                  placeholder={"api.github.com, api.stripe.com\u2026"}
                   value={cred.allowedHosts}
                   onChange={(e) => {
                     const val = e.target.value;
@@ -1739,11 +1747,13 @@ export default function DeployForm({ onDeployStarted }: Props) {
                   }}
                   style={{ width: "100%", marginBottom: "0.25rem" }}
                 />
-                <small style={{ color: "var(--text-secondary)", fontSize: "0.8rem" }}>Hostnames only — no https:// prefix or paths</small>
+                <small style={{ color: "var(--text-secondary)", fontSize: "0.8rem" }}>{"Hostnames only \u2014 no https:// prefix or paths"}</small>
                 <div style={{ display: "flex", gap: "0.5rem" }}>
                   <input
                     type="text"
-                    placeholder="Header name (default: Authorization)"
+                    name={`cred-header-dst-${idx}`}
+                    aria-label={`Credential ${cred.name || idx + 1} header name`}
+                    placeholder={"Header name (default: Authorization)\u2026"}
                     value={cred.headerDst}
                     onChange={(e) => {
                       const val = e.target.value;
@@ -1757,7 +1767,9 @@ export default function DeployForm({ onDeployStarted }: Props) {
                   />
                   <input
                     type="text"
-                    placeholder="Header format (default: Bearer %s)"
+                    name={`cred-header-fmt-${idx}`}
+                    aria-label={`Credential ${cred.name || idx + 1} header format`}
+                    placeholder={"Header format (default: Bearer %s)\u2026"}
                     value={cred.headerFmt}
                     onChange={(e) => {
                       const val = e.target.value;
@@ -1795,7 +1807,7 @@ export default function DeployForm({ onDeployStarted }: Props) {
                 marginBottom: "1rem",
               }}
             >
-              + Add credential
+              + Add Credential
             </button>
           </>
         )}

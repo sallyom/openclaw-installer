@@ -587,6 +587,7 @@ export default function InstanceList() {
                         <span style={{ flex: 1, fontSize: "0.85rem" }}>{cred.name}</span>
                         <button
                           className="btn btn-ghost"
+                          aria-label={`Remove credential ${cred.name}`}
                           style={{ padding: "0.25rem 0.5rem", fontSize: "0.8rem" }}
                           onClick={() => {
                             setCredDrafts((prev) => ({
@@ -603,7 +604,9 @@ export default function InstanceList() {
                         <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.25rem" }}>
                           <input
                             type="text"
-                            placeholder="Name (e.g. github)"
+                            name={`cred-name-${inst.id}-${idx}`}
+                            aria-label={`Credential ${idx + 1} name`}
+                            placeholder={"Name (e.g. github)\u2026"}
                             value={cred.name}
                             onChange={(e) => {
                               const val = e.target.value;
@@ -617,6 +620,7 @@ export default function InstanceList() {
                           />
                           <button
                             className="btn btn-ghost"
+                            aria-label={`Remove credential ${cred.name || idx + 1}`}
                             style={{ padding: "0.25rem 0.5rem", fontSize: "0.8rem" }}
                             onClick={() => {
                               setCredDrafts((prev) => ({
@@ -630,8 +634,11 @@ export default function InstanceList() {
                         </div>
                         <input
                           type="password"
+                          name={`cred-secret-${inst.id}-${idx}`}
+                          aria-label={`Credential ${cred.name || idx + 1} secret`}
                           autoComplete="new-password"
-                          placeholder="API key or token"
+                          spellCheck={false}
+                          placeholder={"API key or token\u2026"}
                           value={cred.secret}
                           onChange={(e) => {
                             const val = e.target.value;
@@ -645,7 +652,9 @@ export default function InstanceList() {
                         />
                         <input
                           type="text"
-                          placeholder="Allowed hosts (comma-separated, e.g. api.github.com)"
+                          name={`cred-hosts-${inst.id}-${idx}`}
+                          aria-label={`Credential ${cred.name || idx + 1} allowed hosts`}
+                          placeholder={"Allowed hosts (e.g. api.github.com)\u2026"}
                           value={cred.allowedHosts}
                           onChange={(e) => {
                             const val = e.target.value;
@@ -660,7 +669,9 @@ export default function InstanceList() {
                         <div style={{ display: "flex", gap: "0.5rem" }}>
                           <input
                             type="text"
-                            placeholder="Header name (default: Authorization)"
+                            name={`cred-header-dst-${inst.id}-${idx}`}
+                            aria-label={`Credential ${cred.name || idx + 1} header name`}
+                            placeholder={"Header name (default: Authorization)\u2026"}
                             value={cred.headerDst}
                             onChange={(e) => {
                               const val = e.target.value;
@@ -674,7 +685,9 @@ export default function InstanceList() {
                           />
                           <input
                             type="text"
-                            placeholder="Header format (default: Bearer %s)"
+                            name={`cred-header-fmt-${inst.id}-${idx}`}
+                            aria-label={`Credential ${cred.name || idx + 1} header format`}
+                            placeholder={"Header format (default: Bearer %s)\u2026"}
                             value={cred.headerFmt}
                             onChange={(e) => {
                               const val = e.target.value;
@@ -710,7 +723,7 @@ export default function InstanceList() {
                     disabled={credUpdating === inst.id}
                     onClick={() => handleUpdateCredentials(inst.id)}
                   >
-                    {credUpdating === inst.id ? "Applying..." : "Apply Changes"}
+                    {credUpdating === inst.id ? "Applying\u2026" : "Apply Changes"}
                   </button>
                 </div>
               </div>
