@@ -2,7 +2,7 @@ import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { v4 as uuid } from "uuid";
 import type {
   Deployer,
@@ -11,6 +11,7 @@ import type {
   DeployResult,
   LogCallback,
 } from "./types.js";
+import { redactConfig } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 import {
@@ -29,7 +30,7 @@ import {
   LITELLM_IMAGE,
   LITELLM_PORT,
 } from "./litellm.js";
-import { shouldUseOtel, OTEL_HTTP_PORT } from "./otel.js";
+import { shouldUseOtel, otelAgentEnv, OTEL_HTTP_PORT } from "./otel.js";
 import { startOtelSidecar, stopOtelSidecar, startJaegerSidecar, otelContainerName, jaegerContainerName } from "./local-otel.js";
 import { JAEGER_UI_PORT } from "./otel.js";
 import { agentWorkspaceDir, installerLocalInstanceDir, openclawHomeDir } from "../paths.js";
@@ -38,12 +39,34 @@ import { buildSandboxConfig } from "./sandbox.js";
 import { buildSandboxToolPolicy } from "./tool-policy.js";
 import { loadAgentSourceBundle } from "./agent-source.js";
 
+import {
+  shouldUseTokenizer,
+  generateTokenizerOpenKey,
+  deriveTokenizerSealKey,
+  sealCredential,
+  tokenizerAgentEnv,
+  generateTokenizerSkill,
+  validateTokenizerCredentials,
+  normalizeTokenizerCredentials,
+  sanitizeCredName,
+  TOKENIZER_IMAGE,
+  type SealedCredential,
+} from "./tokenizer.js";
+
+import {
+  tokenizerContainerName as tkzContainerName,
+  startTokenizerContainer,
+  stopTokenizerContainer,
+  TOKENIZER_OPEN_KEY_PATH,
+} from "./local-tokenizer.js";
+
 const DEFAULT_IMAGE = process.env.OPENCLAW_IMAGE || "ghcr.io/openclaw/openclaw:latest";
 const DEFAULT_VERTEX_IMAGE = process.env.OPENCLAW_VERTEX_IMAGE || DEFAULT_IMAGE;
 const DEFAULT_PORT = 18789;
 const GCP_SA_CONTAINER_PATH = "/home/node/.openclaw/gcp/sa.json";
 const LITELLM_CONFIG_PATH = "/home/node/.openclaw/litellm/config.yaml";
 const LITELLM_KEY_PATH = "/home/node/.openclaw/litellm/master-key";
+const TOKENIZER_SKILL_PATH = "/home/node/.openclaw/skills/tokenizer/SKILL.md";
 const SANDBOX_SSH_DIR = "/home/node/.openclaw/sandbox-ssh";
 const SANDBOX_SSH_IDENTITY_CONTAINER_PATH = `${SANDBOX_SSH_DIR}/identity`;
 const SANDBOX_SSH_CERTIFICATE_CONTAINER_PATH = `${SANDBOX_SSH_DIR}/certificate.pub`;
@@ -485,14 +508,19 @@ function runCommand(
 ): Promise<{ code: number }> {
   return new Promise((resolve, reject) => {
     // Redact secrets from logged command
-    const redacted = args.map((a, i) =>
-      args[i - 1] === "-e" &&
-      /^(ANTHROPIC_API_KEY|OPENAI_API_KEY|TELEGRAM_BOT_TOKEN|SSH_IDENTITY|SSH_CERTIFICATE|SSH_KNOWN_HOSTS)=/.test(
-        a,
-      )
-        ? a.replace(/=.*/, "=***")
-        : a
-    );
+    const sensitiveEnvPattern =
+      /^(ANTHROPIC_API_KEY|OPENAI_API_KEY|TELEGRAM_BOT_TOKEN|SSH_IDENTITY|SSH_CERTIFICATE|SSH_KNOWN_HOSTS|LITELLM_API_KEY|TOKENIZER_AUTH_\w+|TOKENIZER_CRED_\w+)=/;
+    const redacted = args.map((a, i) => {
+      // Redact -e KEY=VALUE for sensitive env vars
+      if (args[i - 1] === "-e" && sensitiveEnvPattern.test(a)) {
+        return a.replace(/=.*/, "=***");
+      }
+      // Redact base64 content in sh -c scripts (echo '<b64>' | base64 -d)
+      if (args[i - 1] === "-c" && a.includes("base64 -d")) {
+        return a.replace(/echo\s+'[A-Za-z0-9+/=]+'(?=\s*\|\s*base64)/g, "echo '***'");
+      }
+      return a;
+    });
     log(`$ ${cmd} ${redacted.join(" ")}`);
     const proc = spawn(cmd, args);
     proc.stdout.on("data", (data: Buffer) => {
@@ -508,6 +536,178 @@ function runCommand(
     proc.on("error", reject);
     proc.on("close", (code) => resolve({ code: code ?? 1 }));
   });
+}
+
+/**
+ * Recover tokenizer env vars (TOKENIZER_*) from the workspace .env file on a volume.
+ * Returns the env record, or undefined if none found.
+ */
+async function recoverTokenizerEnvFromVolume(
+  runtime: string,
+  vol: string,
+  image: string,
+  workspaceDir: string,
+  log: LogCallback,
+): Promise<Record<string, string> | undefined> {
+  if (/[^a-zA-Z0-9_\-/.]/.test(workspaceDir)) {
+    throw new Error(`Invalid workspace directory path: contains unsafe characters`);
+  }
+  try {
+    const { stdout } = await execFileAsync(runtime, [
+      "run", "--rm",
+      "-v", `${vol}:/home/node/.openclaw`,
+      image, "sh", "-c",
+      `grep '^TOKENIZER_' '${workspaceDir}/.env' 2>/dev/null || true`,
+    ]);
+    if (stdout.trim()) {
+      const env: Record<string, string> = {};
+      for (const line of stdout.trim().split("\n")) {
+        const [key, ...rest] = line.split("=");
+        if (key) env[key.trim()] = rest.join("=").trim();
+      }
+      log("Recovered tokenizer env vars from volume");
+      return env;
+    }
+  } catch {
+    log("Could not recover tokenizer env vars from volume");
+  }
+  return undefined;
+}
+
+/**
+ * Recover the existing tokenizer open key from the volume.
+ * Used during credential updates to reuse the same key so that
+ * preserved (kept) credentials remain decryptable.
+ */
+async function recoverTokenizerOpenKeyFromVolume(
+  runtime: string,
+  vol: string,
+  image: string,
+  log: LogCallback,
+): Promise<string | undefined> {
+  try {
+    const { stdout } = await execFileAsync(runtime, [
+      "run", "--rm",
+      "-v", `${vol}:/home/node/.openclaw:ro`,
+      image, "sh", "-c",
+      `cat ${TOKENIZER_OPEN_KEY_PATH} 2>/dev/null || true`,
+    ]);
+    const key = stdout.trim();
+    if (key) {
+      log("Recovered existing tokenizer open key from volume");
+      return key;
+    }
+  } catch {
+    log("Could not recover tokenizer open key from volume");
+  }
+  return undefined;
+}
+
+/**
+ * Seal credentials and write all tokenizer files (open key, skill, .env snippet)
+ * into the data volume. Returns the env record for buildRunArgs.
+ *
+ * @param cleanExisting  If true, strips old TOKENIZER_* lines from .env first (for updates).
+ * @param existingOpenKey  If provided, reuses this open key instead of generating a new one.
+ *                         Required when preserving existing sealed credentials (C-1 fix).
+ */
+async function sealAndWriteTokenizerToVolume(
+  credentials: Array<{ name: string; secret: string; allowedHosts: string[]; headerDst?: string; headerFmt?: string }>,
+  runtime: string,
+  vol: string,
+  image: string,
+  workspaceDir: string,
+  log: LogCallback,
+  cleanExisting = false,
+  preservedEnv: Record<string, string> = {},
+  existingOpenKey?: string,
+): Promise<Record<string, string>> {
+  if (/[^a-zA-Z0-9_\-/.]/.test(workspaceDir)) {
+    throw new Error(`Invalid workspace directory path: contains unsafe characters`);
+  }
+  const openKey = existingOpenKey ?? generateTokenizerOpenKey();
+  const sealKey = deriveTokenizerSealKey(openKey);
+  const sealed: SealedCredential[] = credentials.map((c) => sealCredential(c, sealKey));
+  const tokenizerEnv = { ...tokenizerAgentEnv(sealed, sealKey), ...preservedEnv };
+
+  const skillMd = generateTokenizerSkill(sealed);
+  const envLines = Object.entries(tokenizerEnv)
+    .map(([k, v]) => `${k}=${v}`)
+    .join("\n") + "\n";
+
+  // Pipe secret data via stdin so it never appears in /proc/*/cmdline.
+  // The shell script reads three base64 blobs separated by newlines from stdin.
+  const stdinPayload = [
+    Buffer.from(openKey).toString("base64"),
+    Buffer.from(skillMd).toString("base64"),
+    Buffer.from(envLines).toString("base64"),
+  ].join("\n") + "\n";
+
+  const script = [
+    // Read three base64 blobs from stdin (-r prevents backslash interpretation)
+    `read -r OPEN_KEY_B64`,
+    `read -r SKILL_B64`,
+    `read -r ENV_B64`,
+    `mkdir -p /home/node/.openclaw/tokenizer`,
+    `mkdir -p /home/node/.openclaw/skills/tokenizer`,
+    `echo "$OPEN_KEY_B64" | base64 -d > ${TOKENIZER_OPEN_KEY_PATH}`,
+    `chmod 600 ${TOKENIZER_OPEN_KEY_PATH}`,
+    `echo "$SKILL_B64" | base64 -d > ${TOKENIZER_SKILL_PATH}`,
+    ...(cleanExisting
+      ? [`if [ -f '${workspaceDir}/.env' ]; then sed -i '/^TOKENIZER_/d' '${workspaceDir}/.env'; fi`]
+      : []),
+    `echo "$ENV_B64" | base64 -d >> '${workspaceDir}/.env'`,
+    `chmod 600 '${workspaceDir}/.env'`,
+  ].join(" && ");
+
+  // Use spawn directly to pipe stdin, bypassing runCommand's argument logging
+  const code = await new Promise<number>((resolve, reject) => {
+    const proc = spawn(runtime, [
+      "run", "--rm", "-i",
+      "-v", `${vol}:/home/node/.openclaw`,
+      image, "sh", "-c", script,
+    ]);
+    proc.stdin.write(stdinPayload);
+    proc.stdin.end();
+    proc.stdout.on("data", (data: Buffer) => {
+      for (const line of data.toString().split("\n")) {
+        if (line) log(line);
+      }
+    });
+    proc.stderr.on("data", (data: Buffer) => {
+      for (const line of data.toString().split("\n")) {
+        if (line) log(line);
+      }
+    });
+    proc.on("error", reject);
+    proc.on("close", (c) => resolve(c ?? 1));
+  });
+  if (code !== 0) {
+    throw new Error("Failed to write tokenizer config to volume");
+  }
+
+  return tokenizerEnv;
+}
+
+/**
+ * Recover the LiteLLM master key from the data volume.
+ * Returns the key string, or undefined if not found.
+ */
+async function recoverLitellmKeyFromVolume(
+  runtime: string,
+  vol: string,
+  image: string,
+): Promise<string | undefined> {
+  try {
+    const { stdout } = await execFileAsync(runtime, [
+      "run", "--rm",
+      "-v", `${vol}:/home/node/.openclaw`,
+      image, "cat", LITELLM_KEY_PATH,
+    ]);
+    return stdout.trim() || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function defaultAgentSourceDir(isContainerized: boolean): string | null {
@@ -530,12 +730,14 @@ function buildRunArgs(
   port: number,
   litellmMasterKey?: string,
   otelEnvVars?: Record<string, string>,
+  tokenizerEnvVars?: Record<string, string>,
 ): string[] {
   const { effectiveConfig } = prepareLocalSandboxSshConfig(config);
   const image = resolveImage(effectiveConfig);
-  const useProxy = shouldUseLitellmProxy(effectiveConfig) && !!litellmMasterKey;
+  const useLitellm = shouldUseLitellmProxy(effectiveConfig) && !!litellmMasterKey;
   const useOtelSidecar = shouldUseOtel(effectiveConfig) && !!otelEnvVars;
-  const hasSidecars = useProxy || useOtelSidecar;
+  const useTkz = shouldUseTokenizer(effectiveConfig) && !!tokenizerEnvVars;
+  const hasSidecars = useLitellm || useOtelSidecar || useTkz;
   const isPodman = runtime === "podman";
 
   const runArgs = [
@@ -548,13 +750,15 @@ function buildRunArgs(
   ];
 
   if (hasSidecars && isPodman) {
-    // Podman: gateway runs in the same pod as sidecars (port is on the pod)
+    // Podman: gateway runs in the same pod as sidecars (ports are on the pod)
     runArgs.push("--pod", podName(effectiveConfig));
   } else if (hasSidecars && !isPodman) {
     // Docker: share the first sidecar's network namespace
-    const networkContainer = useProxy
+    const networkContainer = useLitellm
       ? litellmContainerName(effectiveConfig)
-      : otelContainerName(effectiveConfig);
+      : useOtelSidecar
+        ? otelContainerName(effectiveConfig)
+        : tkzContainerName(name);
     runArgs.push("--network", `container:${networkContainer}`);
   } else {
     runArgs.push("-p", `${port}:18789`);
@@ -573,17 +777,17 @@ function buildRunArgs(
 
   // Fix for #6: in proxy mode the gateway talks to LiteLLM, not directly
   // to Anthropic/OpenAI, so don't expose API keys to the gateway.
-  if (!useProxy && effectiveConfig.anthropicApiKey && !effectiveConfig.anthropicApiKeyRef) {
+  if (!useLitellm && effectiveConfig.anthropicApiKey && !effectiveConfig.anthropicApiKeyRef) {
     env.ANTHROPIC_API_KEY = effectiveConfig.anthropicApiKey;
   }
-  if (!useProxy && effectiveConfig.openaiApiKey && !effectiveConfig.openaiApiKeyRef) {
+  if (!useLitellm && effectiveConfig.openaiApiKey && !effectiveConfig.openaiApiKeyRef) {
     env.OPENAI_API_KEY = effectiveConfig.openaiApiKey;
   }
   if (effectiveConfig.modelEndpoint) {
     env.MODEL_ENDPOINT = effectiveConfig.modelEndpoint;
   }
 
-  if (effectiveConfig.vertexEnabled && useProxy) {
+  if (effectiveConfig.vertexEnabled && useLitellm) {
     // Proxy mode: gateway talks to LiteLLM via the litellm provider config in openclaw.json
     env.LITELLM_API_KEY = litellmMasterKey;
   } else if (effectiveConfig.vertexEnabled) {
@@ -623,6 +827,11 @@ function buildRunArgs(
     Object.assign(env, otelEnvVars);
   }
 
+  // Tokenizer proxy env vars (sealed credentials + proxy URL)
+  if (useTkz && tokenizerEnvVars) {
+    Object.assign(env, tokenizerEnvVars);
+  }
+
   for (const [key, val] of Object.entries(env)) {
     runArgs.push("-e", `${key}=${val}`);
   }
@@ -635,6 +844,9 @@ function buildRunArgs(
 
   return runArgs;
 }
+
+/** Per-instance lock to prevent concurrent credential updates at the deployer level. */
+const localCredUpdateLocks = new Set<string>();
 
 export class LocalDeployer implements Deployer {
   async deploy(config: DeployConfig, log: LogCallback): Promise<DeployResult> {
@@ -991,48 +1203,136 @@ something that requires the user's attention.`;
       log("Could not save agent files to host (directory may not be writable)");
     }
 
-    // Create pod for OTEL sidecars if LiteLLM didn't already create one
-    const useOtelSidecars = shouldUseOtel(config);
-    if (useOtelSidecars && !useProxy && runtime === "podman") {
-      const pod = podName(config);
-      await runCommand(runtime, ["pod", "rm", "-f", pod], () => {});
-      const podPorts = [
-        "-p", `${port}:18789`,
-        ...(config.otelJaeger ? ["-p", `${JAEGER_UI_PORT}:${JAEGER_UI_PORT}`] : []),
-      ];
-      await runCommand(runtime, [
-        "pod", "create", "--name", pod, ...podPorts,
-      ], log);
-    }
+    // Start Tokenizer proxy sidecar if enabled
+    const useTkz = shouldUseTokenizer(config);
+    let tokenizerEnv: Record<string, string> | undefined;
 
-    // Start Jaeger sidecar before OTEL collector (collector exports to Jaeger)
-    if (config.otelJaeger) {
-      await startJaegerSidecar(
-        config, runtime, podName(config), log, runCommand,
+    // Track started sidecars for cleanup on failure — all sidecar starts
+    // below are wrapped in the same try/catch so any failure cleans up
+    // previously started sidecars.
+    const startedSidecars: string[] = [];
+    let otelEnv: Record<string, string> | undefined;
+
+    try {
+      if (useTkz && config.tokenizerCredentials?.length) {
+        // Validate and normalize credentials before sealing
+        const credError = validateTokenizerCredentials(config.tokenizerCredentials);
+        if (credError) {
+          throw new Error(`Invalid tokenizer credentials: ${credError}`);
+        }
+        const normalizedDeployCreds = normalizeTokenizerCredentials(config.tokenizerCredentials);
+
+        log("Tokenizer proxy enabled — credentials will be sealed and injected by the proxy");
+        tokenizerEnv = await sealAndWriteTokenizerToVolume(
+          normalizedDeployCreds as Array<{ name: string; secret: string; allowedHosts: string[]; headerDst?: string; headerFmt?: string }>,
+          runtime, vol, image, workspaceDir, log,
+        );
+
+        // Pull Tokenizer image
+        const tkzImage = config.tokenizerImage || TOKENIZER_IMAGE;
+        try {
+          await execFileAsync(runtime, ["image", "inspect", tkzImage]);
+          log(`Using local Tokenizer image: ${tkzImage}`);
+        } catch {
+          log(`Pulling Tokenizer image ${tkzImage}...`);
+          const pull = await runCommand(runtime, ["pull", tkzImage], log);
+          if (pull.code !== 0) {
+            throw new Error(
+              `Failed to pull Tokenizer image. Pull it manually:\n` +
+              `  ${runtime} pull ${tkzImage}`,
+            );
+          }
+        }
+
+        const tkzName = tkzContainerName(name);
+        const isPodman = runtime === "podman";
+
+        // If no pod exists yet (LiteLLM not active), create one
+        if (!useProxy && isPodman) {
+          const pod = podName(config);
+          await runCommand(runtime, ["pod", "rm", "-f", pod], () => {});
+          const podPorts = [
+            "-p", `${port}:18789`,
+            ...(config.otelJaeger ? ["-p", `${JAEGER_UI_PORT}:${JAEGER_UI_PORT}`] : []),
+          ];
+          const podResult = await runCommand(runtime, [
+            "pod", "create", "--name", pod, ...podPorts,
+          ], log);
+          if (podResult.code !== 0) {
+            throw new Error("Failed to create pod for Tokenizer sidecar");
+          }
+        }
+
+        await startTokenizerContainer({
+          config, runtime: runtime as ContainerRuntime, tkzName, vol, port,
+          podName: podName(config),
+          networkContainer: useProxy ? litellmContainerName(config) : undefined,
+          log, runCommand,
+        });
+        startedSidecars.push(tkzContainerName(name));
+      }
+
+      // Create pod for OTEL sidecars if LiteLLM didn't already create one
+      const useOtelSidecars = shouldUseOtel(config);
+      if (useOtelSidecars && !useProxy && !useTkz && runtime === "podman") {
+        const pod = podName(config);
+        await runCommand(runtime, ["pod", "rm", "-f", pod], () => {});
+        const podPorts = [
+          "-p", `${port}:18789`,
+          ...(config.otelJaeger ? ["-p", `${JAEGER_UI_PORT}:${JAEGER_UI_PORT}`] : []),
+        ];
+        await runCommand(runtime, [
+          "pod", "create", "--name", pod, ...podPorts,
+        ], log);
+      }
+
+      // Start Jaeger sidecar before OTEL collector (collector exports to Jaeger)
+      if (config.otelJaeger) {
+        await startJaegerSidecar(
+          config, runtime, podName(config), log, runCommand,
+          (rt, nm) => removeContainer(rt as ContainerRuntime, nm),
+        );
+      }
+
+      // Start OTEL collector sidecar if enabled
+      // In Docker, the OTEL sidecar must join the network namespace of the first
+      // sidecar that owns the published ports (LiteLLM > Tokenizer).
+      const networkOwner = useProxy
+        ? litellmContainerName(config)
+        : useTkz
+          ? tkzContainerName(name)
+          : null;
+      otelEnv = await startOtelSidecar(
+        config, runtime, vol,
+        (useProxy || useOtelSidecars || useTkz) ? podName(config) : null,
+        networkOwner,
+        port, image, log, runCommand,
         (rt, nm) => removeContainer(rt as ContainerRuntime, nm),
       );
-    }
+      if (otelEnv) startedSidecars.push(otelContainerName(config));
 
-    // Start OTEL collector sidecar if enabled
-    const otelEnv = await startOtelSidecar(
-      config, runtime, vol,
-      (useProxy || useOtelSidecars) ? podName(config) : null,
-      useProxy ? litellmContainerName(config) : null,
-      port, image, log, runCommand,
-      (rt, nm) => removeContainer(rt as ContainerRuntime, nm),
-    );
+      const runArgs = buildRunArgs(config, runtime, name, port, litellmMasterKey, otelEnv, tokenizerEnv);
 
-    const runArgs = buildRunArgs(config, runtime, name, port, litellmMasterKey, otelEnv);
-
-    log(`Starting OpenClaw container: ${name}`);
-    const run = await runCommand(runtime, runArgs, log);
-    if (run.code !== 0) {
-      throw new Error("Failed to start container");
+      log(`Starting OpenClaw container: ${name}`);
+      const run = await runCommand(runtime, runArgs, log);
+      if (run.code !== 0) {
+        throw new Error("Failed to start container");
+      }
+    } catch (err) {
+      // Clean up any sidecars that were started before the failure
+      for (const sidecar of startedSidecars) {
+        try {
+          await removeContainer(runtime as ContainerRuntime, sidecar);
+        } catch {
+          // best-effort cleanup
+        }
+      }
+      throw err;
     }
 
     log("");
     log("=== Container Info ===");
-    const hasSidecars = useProxy || !!otelEnv;
+    const hasSidecars = useProxy || !!otelEnv || useTkz;
     if (hasSidecars) {
       const isPodman = runtime === "podman";
       if (isPodman) {
@@ -1042,6 +1342,7 @@ something that requires the user's attention.`;
       if (useProxy) log(`LiteLLM container: ${litellmContainerName(config)}`);
       if (otelEnv) log(`OTEL container:    ${otelContainerName(config)}`);
       if (config.otelJaeger) log(`Jaeger container:  ${jaegerContainerName(config)}`);
+      if (useTkz) log(`Tokenizer container: ${tkzContainerName(name)}`);
       log("");
       if (config.otelJaeger) log(`Jaeger UI: http://localhost:${JAEGER_UI_PORT}`);
       log("");
@@ -1053,6 +1354,7 @@ something that requires the user's attention.`;
       if (useProxy) log(`  ${runtime} logs ${litellmContainerName(config)}  # LiteLLM proxy logs`);
       if (otelEnv) log(`  ${runtime} logs ${otelContainerName(config)}  # OTEL collector logs`);
       if (config.otelJaeger) log(`  ${runtime} logs ${jaegerContainerName(config)}  # Jaeger logs`);
+      if (useTkz) log(`  ${runtime} logs ${tkzContainerName(name)}  # Tokenizer proxy logs`);
     } else {
       log(`Container: ${name}`);
       log("");
@@ -1076,7 +1378,7 @@ something that requires the user's attention.`;
       id,
       mode: "local",
       status: "running",
-      config: { ...config, containerRuntime: runtime },
+      config: redactConfig({ ...config, containerRuntime: runtime }),
       startedAt: new Date().toISOString(),
       url,
       containerId: name,
@@ -1096,6 +1398,7 @@ something that requires the user's attention.`;
     // Copy updated agent files from host into volume before starting
     const isContainerized = existsSync("/.dockerenv") || existsSync("/run/.containerenv");
     const agentId = `${effectiveConfig.prefix || "openclaw"}_${effectiveConfig.agentName}`;
+    const workspaceDir = `/home/node/.openclaw/workspace-${agentId}`;
     const agentSourceDir = normalizeHostPath(effectiveConfig.agentSourceDir) || defaultAgentSourceDir(isContainerized);
 
     if (
@@ -1105,7 +1408,6 @@ something that requires the user's attention.`;
       )
     ) {
       log("Updating agent files from host...");
-      const workspaceDir = `/home/node/.openclaw/workspace-${agentId}`;
       const copyScript = [
         `cp /tmp/agent-source/workspace-${agentId}/* '${workspaceDir}/' 2>/dev/null || true`,
         `if [ -d /tmp/agent-source/skills ]; then mkdir -p /home/node/.openclaw/skills && cp -r /tmp/agent-source/skills/* /home/node/.openclaw/skills/ 2>/dev/null || true; fi`,
@@ -1156,14 +1458,8 @@ something that requires the user's attention.`;
     let litellmMasterKey: string | undefined;
 
     if (useProxy) {
-      try {
-        const { stdout } = await execFileAsync(runtime, [
-          "run", "--rm",
-          "-v", `${vol}:/home/node/.openclaw`,
-          image, "cat", LITELLM_KEY_PATH,
-        ]);
-        litellmMasterKey = stdout.trim();
-      } catch {
+      litellmMasterKey = await recoverLitellmKeyFromVolume(runtime, vol, image);
+      if (!litellmMasterKey) {
         // Key not found — generate a new one and rewrite config
         log("LiteLLM master key not found in volume — regenerating");
         litellmMasterKey = generateLitellmMasterKey();
@@ -1236,9 +1532,59 @@ something that requires the user's attention.`;
       }
     }
 
-    // Create pod for OTEL sidecars if LiteLLM didn't already create one
+    // Recover tokenizer env vars from volume if tokenizer was used
+    const useTkz = shouldUseTokenizer(effectiveConfig);
+    let tokenizerEnv: Record<string, string> | undefined;
+
+    if (useTkz) {
+      tokenizerEnv = await recoverTokenizerEnvFromVolume(runtime, vol, image, workspaceDir, log);
+      if (!tokenizerEnv) {
+        log("WARNING: Tokenizer is enabled but env vars could not be recovered from volume — skipping tokenizer sidecar; gateway will not use the tokenizer proxy");
+      } else {
+        // Ensure Tokenizer image is available (may have been pruned since deploy)
+        const tkzImage = effectiveConfig.tokenizerImage || TOKENIZER_IMAGE;
+        try {
+          await execFileAsync(runtime, ["image", "inspect", tkzImage]);
+        } catch {
+          log(`Pulling Tokenizer image ${tkzImage}...`);
+          const pull = await runCommand(runtime, ["pull", tkzImage], log);
+          if (pull.code !== 0) {
+            throw new Error(
+              `Failed to pull Tokenizer image. Pull it manually:\n` +
+              `  ${runtime} pull ${tkzImage}`,
+            );
+          }
+        }
+
+        // Create pod if needed (no LiteLLM)
+        if (!useProxy && runtime === "podman") {
+          const pod = podName(effectiveConfig);
+          await runCommand(runtime, ["pod", "rm", "-f", pod], () => {});
+          const podPorts = [
+            "-p", `${port}:18789`,
+            ...(effectiveConfig.otelJaeger ? ["-p", `${JAEGER_UI_PORT}:${JAEGER_UI_PORT}`] : []),
+          ];
+          await runCommand(runtime, [
+            "pod", "create", "--name", pod, ...podPorts,
+          ], log);
+        }
+
+        // Stop existing tokenizer sidecar (if any) before restarting
+        const tkzName = tkzContainerName(name);
+        await stopTokenizerContainer(runtime, tkzName, log, runCommand);
+
+        await startTokenizerContainer({
+          config: effectiveConfig, runtime: runtime as ContainerRuntime, tkzName, vol, port,
+          podName: podName(effectiveConfig),
+          networkContainer: useProxy ? litellmContainerName(effectiveConfig) : undefined,
+          log, runCommand,
+        });
+      }
+    }
+
+    // Create pod for OTEL sidecars if LiteLLM/tokenizer didn't already create one
     const useOtelSidecars = shouldUseOtel(effectiveConfig);
-    if (useOtelSidecars && !useProxy && runtime === "podman") {
+    if (useOtelSidecars && !useProxy && !useTkz && runtime === "podman") {
       const pod = podName(effectiveConfig);
       await runCommand(runtime, ["pod", "rm", "-f", pod], () => {});
       const podPorts = [
@@ -1259,16 +1605,22 @@ something that requires the user's attention.`;
     }
 
     // Restart OTEL sidecar if enabled
+    // In Docker, join the first sidecar's network namespace (LiteLLM > Tokenizer).
+    const networkOwner = useProxy
+      ? litellmContainerName(effectiveConfig)
+      : useTkz
+        ? tkzContainerName(name)
+        : null;
     const otelEnv = await startOtelSidecar(
       effectiveConfig, runtime, vol,
-      (useProxy || useOtelSidecars) ? podName(effectiveConfig) : null,
-      useProxy ? litellmContainerName(effectiveConfig) : null,
+      (useProxy || useOtelSidecars || useTkz) ? podName(effectiveConfig) : null,
+      networkOwner,
       port, image, log, runCommand,
       (rt, nm) => removeContainer(rt as ContainerRuntime, nm),
     );
 
     log(`Starting OpenClaw container: ${name}`);
-    const runArgs = buildRunArgs(effectiveConfig, runtime, name, port, litellmMasterKey, otelEnv);
+    const runArgs = buildRunArgs(effectiveConfig, runtime, name, port, litellmMasterKey, otelEnv, tokenizerEnv);
     const run = await runCommand(runtime, runArgs, log);
     if (run.code !== 0) {
       throw new Error("Failed to start container");
@@ -1440,6 +1792,20 @@ something that requires the user's attention.`;
           lines.push(`OTEL_IMAGE=${config.otelImage}`);
         }
       }
+      if (config.tokenizerEnabled) {
+        lines.push(`TOKENIZER_ENABLED=true`);
+        if (config.tokenizerImage) {
+          lines.push(`TOKENIZER_IMAGE=${config.tokenizerImage}`);
+        }
+        if (config.tokenizerCredentials?.length) {
+          // Save credential metadata (names + hosts) but not raw secrets
+          const credMeta = config.tokenizerCredentials.map((c) => ({
+            name: c.name,
+            allowedHosts: c.allowedHosts,
+          }));
+          lines.push(`TOKENIZER_CREDENTIALS_META=${Buffer.from(JSON.stringify(credMeta)).toString("base64")}`);
+        }
+      }
       if (config.telegramBotToken && !config.telegramBotTokenRef) {
         lines.push(`TELEGRAM_BOT_TOKEN=${config.telegramBotToken}`);
       }
@@ -1493,6 +1859,157 @@ something that requires the user's attention.`;
     } catch {
       log("Could not save .env file");
     }
+  }
+
+  /**
+   * Update tokenizer credentials on a running local instance.
+   * Generates fresh keys, seals all credentials, updates volume files,
+   * restarts the tokenizer sidecar and agent container.
+   */
+  async updateTokenizerCredentials(
+    result: DeployResult,
+    credentials: Array<{ name: string; secret?: string; allowedHosts: string[]; headerDst?: string; headerFmt?: string }>,
+    log: LogCallback,
+  ): Promise<void> {
+    const runtime = result.config.containerRuntime ?? (await detectRuntime());
+    if (!runtime) throw new Error("No container runtime found");
+
+    const name = result.containerId ?? containerName(result.config);
+
+    // Deployer-level concurrency guard — prevents two concurrent updates from
+    // racing on the same volume and container lifecycle operations.
+    if (localCredUpdateLocks.has(name)) {
+      throw new Error("A credential update is already in progress for this instance");
+    }
+    localCredUpdateLocks.add(name);
+
+    try {
+      await this._doUpdateTokenizerCredentials(result, credentials, log, runtime, name);
+    } finally {
+      localCredUpdateLocks.delete(name);
+    }
+  }
+
+  private async _doUpdateTokenizerCredentials(
+    result: DeployResult,
+    credentials: Array<{ name: string; secret?: string; allowedHosts: string[]; headerDst?: string; headerFmt?: string }>,
+    log: LogCallback,
+    runtime: string,
+    name: string,
+  ): Promise<void> {
+    const vol = volumeName(result.config);
+    const image = resolveImage(result.config);
+    const port = result.config.port ?? DEFAULT_PORT;
+    const agentId = `${result.config.prefix || "openclaw"}_${result.config.agentName}`;
+    const workspaceDir = `/home/node/.openclaw/workspace-${agentId}`;
+
+    // Split into new credentials (have a secret) and kept credentials (preserve existing sealed data).
+    const newCreds = credentials.filter(
+      (c): c is typeof c & { secret: string } => Boolean(c.secret),
+    );
+    const keptCreds = credentials.filter((c) => !c.secret);
+
+    if (newCreds.length > 0) {
+      const credError = validateTokenizerCredentials(newCreds);
+      if (credError) {
+        throw new Error(`Invalid tokenizer credentials: ${credError}`);
+      }
+    }
+    const normalizedNewCreds = normalizeTokenizerCredentials(newCreds);
+    const normalizedKeptCreds = normalizeTokenizerCredentials(keptCreds);
+
+    // Recover existing sealed env vars from the volume for kept credentials.
+    const preservedEnv: Record<string, string> = {};
+    if (keptCreds.length > 0) {
+      const existing = await recoverTokenizerEnvFromVolume(runtime, vol, image, workspaceDir, log);
+      if (existing) {
+        for (const c of normalizedKeptCreds) {
+          const k = sanitizeCredName(c.name);
+          const credKey = `TOKENIZER_CRED_${k}`;
+          const authKey = `TOKENIZER_AUTH_${k}`;
+          if (!existing[credKey] || !existing[authKey]) {
+            throw new Error(`Credential "${c.name}" has no secret and no existing sealed data to preserve`);
+          }
+          preservedEnv[credKey] = existing[credKey];
+          preservedEnv[authKey] = existing[authKey];
+          const hostsKey = `TOKENIZER_HOSTS_${k}`;
+          if (existing[hostsKey]) {
+            preservedEnv[hostsKey] = existing[hostsKey];
+          }
+        }
+      } else {
+        throw new Error("Cannot preserve existing credentials: failed to read sealed data from volume");
+      }
+    }
+
+    // When preserving existing credentials, reuse the same open key so that
+    // the preserved sealed blobs remain decryptable by the tokenizer sidecar.
+    // A fresh key is only generated when ALL credentials are new.
+    let existingOpenKey: string | undefined;
+    if (keptCreds.length > 0) {
+      existingOpenKey = await recoverTokenizerOpenKeyFromVolume(runtime, vol, image, log);
+      if (!existingOpenKey) {
+        throw new Error("Cannot preserve existing credentials: failed to recover open key from volume");
+      }
+    }
+
+    log("Updating tokenizer credentials...");
+    const tokenizerEnv = await sealAndWriteTokenizerToVolume(
+      normalizedNewCreds, runtime, vol, image, workspaceDir, log, /* cleanExisting */ true,
+      preservedEnv, existingOpenKey,
+    );
+    const normalizedCreds = [...normalizedNewCreds, ...normalizedKeptCreds];
+
+    // Stop agent container first so it doesn't send requests with stale
+    // bearer passwords to the new tokenizer sidecar.
+    log("Stopping agent container...");
+    try {
+      const stopResult = await runCommand(runtime, ["stop", name], log);
+      if (stopResult.code !== 0) {
+        log("WARNING: Agent container stop returned non-zero exit code");
+      }
+    } catch {
+      // Container may already be stopped
+    }
+    await removeContainer(runtime as ContainerRuntime, name);
+
+    // Stop existing tokenizer sidecar
+    const tkzName = tkzContainerName(name);
+    await stopTokenizerContainer(runtime, tkzName, log, runCommand);
+
+    // Start fresh tokenizer sidecar
+    const useProxy = shouldUseLitellmProxy(result.config);
+    await startTokenizerContainer({
+      config: result.config, runtime: runtime as ContainerRuntime, tkzName, vol, port,
+      podName: podName(result.config),
+      networkContainer: useProxy ? litellmContainerName(result.config) : undefined,
+      log, runCommand,
+    });
+
+    // Recover LiteLLM master key if proxy is active
+    const litellmMasterKey = useProxy
+      ? await recoverLitellmKeyFromVolume(runtime, vol, image)
+      : undefined;
+
+    // Recover OTEL env vars without restarting the sidecar — only
+    // tokenizer credentials changed, so the OTEL collector is unaffected.
+    const otelEnv = shouldUseOtel(result.config) ? otelAgentEnv() : undefined;
+
+    const runArgs = buildRunArgs(result.config, runtime, name, port, litellmMasterKey, otelEnv, tokenizerEnv);
+    const run = await runCommand(runtime, runArgs, log);
+    if (run.code !== 0) {
+      throw new Error("Failed to restart agent container");
+    }
+
+    // Update saved instance info with new credential metadata
+    const updatedConfig = {
+      ...result.config,
+      tokenizerEnabled: true,
+      tokenizerCredentials: normalizedCreds,
+    };
+    await this.saveInstanceInfo(runtime, name, updatedConfig, log);
+
+    log("Tokenizer credentials updated — agent restarted");
   }
 
   /**
@@ -1561,22 +2078,19 @@ something that requires the user's attention.`;
     await removeContainer(runtime, name);
 
     // Recover LiteLLM master key if proxy is active
-    let litellmMasterKey: string | undefined;
-    if (shouldUseLitellmProxy(result.config)) {
-      try {
-        const { stdout } = await execFileAsync(runtime, [
-          "run", "--rm",
-          "-v", `${vol}:/home/node/.openclaw`,
-          image, "cat", LITELLM_KEY_PATH,
-        ]);
-        litellmMasterKey = stdout.trim();
-      } catch {
-        // No key — proxy will not be used for this restart
-      }
-    }
+    const litellmMasterKey = shouldUseLitellmProxy(result.config)
+      ? await recoverLitellmKeyFromVolume(runtime, vol, image)
+      : undefined;
+
+    // Recover tokenizer env vars from the workspace .env on the volume
+    const tokenizerEnv = shouldUseTokenizer(result.config)
+      ? await recoverTokenizerEnvFromVolume(runtime, vol, image, workspaceDir, log)
+      : undefined;
 
     const port = result.config.port ?? DEFAULT_PORT;
-    const runArgs = buildRunArgs(result.config, runtime, name, port, litellmMasterKey);
+    // Recover OTEL env vars so tracing is preserved across redeploy
+    const otelEnv = shouldUseOtel(result.config) ? otelAgentEnv() : undefined;
+    const runArgs = buildRunArgs(result.config, runtime, name, port, litellmMasterKey, otelEnv, tokenizerEnv);
     const run = await runCommand(runtime, runArgs, log);
     if (run.code !== 0) {
       throw new Error("Failed to restart container");
@@ -1602,6 +2116,10 @@ something that requires the user's attention.`;
     } catch {
       // No sidecar running
     }
+
+    // Stop Tokenizer sidecar if it exists
+    const tkzName = tkzContainerName(name);
+    await stopTokenizerContainer(runtime, tkzName, log, runCommand);
 
     // Stop OTEL sidecar if it exists
     await stopOtelSidecar(result.config, runtime, log, runCommand);
@@ -1633,6 +2151,7 @@ something that requires the user's attention.`;
     await removeContainer(runtime, litellmName);
     await removeContainer(runtime, otelContainerName(result.config));
     await removeContainer(runtime, jaegerContainerName(result.config));
+    await removeContainer(runtime, tkzContainerName(name));
 
     // Remove podman pod if it exists
     if (isPodman) {

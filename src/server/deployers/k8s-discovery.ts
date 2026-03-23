@@ -24,6 +24,8 @@ export interface K8sInstance {
   readyReplicas: number;
   pods: K8sPodInfo[];
   statusDetail: string;   // human-readable progress line
+  tokenizerEnabled?: boolean;
+  tokenizerCredentials?: Array<{ name: string; secret: string; allowedHosts: string[] }>;
 }
 
 export interface DiscoverK8sInstancesOptions {
@@ -160,6 +162,29 @@ export async function discoverK8sInstances(options: DiscoverK8sInstancesOptions 
         const readyReplicas = dep.status?.readyReplicas ?? 0;
         const image = dep.spec?.template?.spec?.containers?.[0]?.image || "";
 
+        // Detect tokenizer sidecar from the deployment spec
+        const containers = dep.spec?.template?.spec?.containers ?? [];
+        const hasTokenizer = containers.some((c) => c.name === "tokenizer");
+
+         // Extract credential names and allowed hosts from the secret
+        let tokenizerCredentials: K8sInstance["tokenizerCredentials"];
+        if (hasTokenizer) {
+          try {
+            const secret = await core.readNamespacedSecret({ name: "openclaw-secrets", namespace: nsName });
+            const data = secret.data || {};
+            const credNames = Object.keys(data)
+              .filter((k) => k.startsWith("TOKENIZER_CRED_"))
+              .map((k) => k.replace("TOKENIZER_CRED_", ""));
+            tokenizerCredentials = credNames.map((name) => {
+              const hostsB64 = data[`TOKENIZER_HOSTS_${name}`];
+              const hosts = hostsB64
+                ? Buffer.from(hostsB64, "base64").toString().split(",").filter(Boolean)
+                : [];
+              return { name, secret: "", allowedHosts: hosts };
+            });
+          } catch { /* secret not readable */ }
+        }
+
         // Fetch pods for detailed status
         const podList = await core.listNamespacedPod({
           namespace: nsName,
@@ -180,6 +205,8 @@ export async function discoverK8sInstances(options: DiscoverK8sInstancesOptions 
           readyReplicas,
           pods,
           statusDetail,
+          tokenizerEnabled: hasTokenizer || undefined,
+          tokenizerCredentials: hasTokenizer ? tokenizerCredentials : undefined,
         });
       } catch {
         // Ignore stale saved namespaces and inaccessible targets.

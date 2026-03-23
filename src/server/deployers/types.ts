@@ -75,6 +75,16 @@ export interface DeployConfig {
   // Agent security
   cronEnabled?: boolean; // default: false (opt-in)
   subagentPolicy?: "none" | "self" | "unrestricted"; // default: "none"
+  // Tokenizer proxy sidecar (credential injection)
+  tokenizerEnabled?: boolean;
+  tokenizerImage?: string;
+  tokenizerCredentials?: Array<{
+    name: string;
+    secret?: string;
+    allowedHosts: string[];
+    headerDst?: string;
+    headerFmt?: string;
+  }>;
   // Telegram channel
   telegramEnabled?: boolean;
   telegramBotToken?: string;
@@ -91,6 +101,22 @@ export interface DeployConfig {
   sshHost?: string;
   sshUser?: string;
   sshKeyPath?: string;
+}
+
+/** Strip sensitive fields from a DeployConfig for safe serialization. */
+export function redactConfig(config: DeployConfig): DeployConfig {
+  return {
+    ...config,
+    anthropicApiKey: config.anthropicApiKey ? "(set)" : undefined,
+    openaiApiKey: config.openaiApiKey ? "(set)" : undefined,
+    gcpServiceAccountJson: config.gcpServiceAccountJson ? "(set)" : undefined,
+    telegramBotToken: config.telegramBotToken ? "(set)" : undefined,
+    sandboxSshIdentity: config.sandboxSshIdentity ? "(set)" : undefined,
+    tokenizerCredentials: config.tokenizerCredentials?.map((c) => ({
+      ...c,
+      secret: "(set)",
+    })),
+  };
 }
 
 export interface DeployResult {
@@ -123,4 +149,10 @@ export interface Deployer {
   status(result: DeployResult): Promise<DeployResult>;
   stop(result: DeployResult, log: LogCallback): Promise<void>;
   teardown(result: DeployResult, log: LogCallback): Promise<void>;
+  updateTokenizerCredentials?(
+    result: DeployResult,
+    credentials: Array<{ name: string; secret?: string; allowedHosts: string[]; headerDst?: string; headerFmt?: string }>,
+    log: LogCallback,
+  ): Promise<void>;
+  redeploy?(result: DeployResult, log: LogCallback): Promise<void>;
 }

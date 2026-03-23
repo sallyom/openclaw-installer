@@ -1,8 +1,12 @@
 import { Router } from "express";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { readFile } from "node:fs/promises";
 import { installerLocalInstanceDir } from "../paths.js";
 import { installerDataDir } from "../paths.js";
 import { join } from "node:path";
+
+const execFileAsync = promisify(execFile);
 import {
   discoverContainers,
   discoverVolumes,
@@ -14,6 +18,7 @@ import { isClusterReachable } from "../services/k8s.js";
 import { registry } from "../deployers/registry.js";
 import { createLogCallback, sendStatus } from "../ws.js";
 import type { DeployResult, DeploySecretRef } from "../deployers/types.js";
+import { validateTokenizerCredentials, normalizeTokenizerCredentials } from "../deployers/tokenizer.js";
 
 const router = Router();
 
@@ -47,6 +52,7 @@ function containerToInstance(c: DiscoveredContainer): DeployResult {
       agentDisplayName: agent
         ? agent.charAt(0).toUpperCase() + agent.slice(1)
         : c.name,
+
     },
     startedAt: c.createdAt,
     url: c.status === "running" ? `http://localhost:${port}` : undefined,
@@ -84,6 +90,28 @@ function decodeSavedBase64UnlessPath(savedValue?: string, savedPath?: string): s
   return decodeSavedBase64(savedValue);
 }
 
+function decodeSavedTokenizerCredentials(
+  meta?: string,
+): Array<{ name: string; allowedHosts: string[]; secret: string }> | undefined {
+  if (!meta) return undefined;
+  try {
+    const parsed = JSON.parse(Buffer.from(meta, "base64").toString("utf8"));
+    if (!Array.isArray(parsed)) return undefined;
+    // Use empty string for secret — these are metadata-only entries used for
+    // display purposes. The raw secrets are never persisted.  Any code path
+    // that needs to re-seal credentials must require the user to supply fresh
+    // secrets (enforced by validateTokenizerCredentials checking !cred.secret).
+    return parsed
+      .filter((c: unknown): c is { name: string; allowedHosts: string[] } =>
+        typeof c === "object" && c !== null
+        && typeof (c as Record<string, unknown>).name === "string"
+        && Array.isArray((c as Record<string, unknown>).allowedHosts))
+      .map((c) => ({ ...c, secret: "" }));
+  } catch {
+    return undefined;
+  }
+}
+
 // List all instances: running containers + stopped volumes (no container due to --rm) + K8s
 router.get("/", async (req, res) => {
   const instances: DeployResult[] = [];
@@ -95,7 +123,16 @@ router.get("/", async (req, res) => {
     if (runtime) {
       const containers = await discoverContainers(runtime);
       const volumes = await discoverVolumes(runtime);
-      instances.push(...containers.map(containerToInstance));
+      const containerNames = new Set(containers.map((c) => c.name));
+      for (const c of containers) {
+        // Skip sidecar containers — they are not instances
+        if (c.name.endsWith("-tokenizer") || c.name.endsWith("-litellm") || c.name.endsWith("-otel") || c.name.endsWith("-jaeger")) continue;
+        const inst = containerToInstance(c);
+        if (containerNames.has(`${c.name}-tokenizer`)) {
+          inst.config.tokenizerEnabled = true;
+        }
+        instances.push(inst);
+      }
 
       const runningContainerNames = new Set(instances.map((i) => i.containerId));
 
@@ -207,6 +244,8 @@ router.get("/", async (req, res) => {
                 : ki.namespace,
               namespace: ki.namespace,
               image: ki.image,
+              tokenizerEnabled: ki.tokenizerEnabled,
+              tokenizerCredentials: ki.tokenizerCredentials,
             },
             startedAt: "",
             url: ki.url || undefined,
@@ -405,13 +444,15 @@ router.get("/:id/command", async (req, res) => {
   if (instance && instance.mode !== "local") {
     const ns = instance.config.namespace || instance.containerId || "";
 
-    // Detect if LiteLLM sidecar is running
+    // Detect if LiteLLM / Tokenizer sidecars are running
     let hasLitellm = false;
+    let hasTokenizer = false;
     try {
       const core = (await import("../services/k8s.js")).coreApi();
       const podList = await core.listNamespacedPod({ namespace: ns, labelSelector: "app=openclaw" });
       const pod = podList.items[0];
       hasLitellm = pod?.spec?.containers?.some((c) => c.name === "litellm") ?? false;
+      hasTokenizer = pod?.spec?.containers?.some((c) => c.name === "tokenizer") ?? false;
     } catch { /* ignore */ }
 
     const lines = [
@@ -427,6 +468,11 @@ router.get("/:id/command", async (req, res) => {
       ...(hasLitellm ? [
         `# View LiteLLM proxy logs`,
         `kubectl logs deployment/openclaw -n ${ns} -c litellm -f`,
+        ``,
+      ] : []),
+      ...(hasTokenizer ? [
+        `# View Tokenizer proxy logs`,
+        `kubectl logs deployment/openclaw -n ${ns} -c tokenizer -f`,
         ``,
       ] : []),
       `# View init container logs`,
@@ -466,14 +512,20 @@ router.get("/:id/command", async (req, res) => {
 
     const containerName = req.params.id;
     const litellmName = `${containerName}-litellm`;
+    const tokenizerName = `${containerName}-tokenizer`;
     const pod = `${containerName}-pod`;
 
-    // Detect if LiteLLM sidecar is running
+    // Detect if LiteLLM / Tokenizer sidecars are running
     let hasLitellm = false;
+    let hasTokenizer = false;
     let hasPod = false;
     try {
       await exec(runtime, ["inspect", litellmName]);
       hasLitellm = true;
+    } catch { /* no sidecar */ }
+    try {
+      await exec(runtime, ["inspect", tokenizerName]);
+      hasTokenizer = true;
     } catch { /* no sidecar */ }
     if (runtime === "podman") {
       try {
@@ -498,10 +550,18 @@ router.get("/:id/command", async (req, res) => {
       lines.push(`${runtime} logs -f ${litellmName}`);
       lines.push(``);
     }
+    if (hasTokenizer) {
+      lines.push(`# Tokenizer proxy logs`);
+      lines.push(`${runtime} logs -f ${tokenizerName}`);
+      lines.push(``);
+    }
     lines.push(`# Stop`);
     lines.push(`${runtime} stop ${containerName}`);
     if (hasLitellm) {
       lines.push(`${runtime} stop ${litellmName}`);
+    }
+    if (hasTokenizer) {
+      lines.push(`${runtime} stop ${tokenizerName}`);
     }
     if (hasPod) {
       lines.push(`${runtime} pod rm -f ${pod}`);
@@ -695,7 +755,41 @@ async function findInstance(name: string): Promise<DeployResult | null> {
   if (runtime) {
     const containers = await discoverContainers(runtime);
     const c = containers.find((c) => c.name === name);
-    if (c) return containerToInstance(c);
+    if (c) {
+      const inst = containerToInstance(c);
+      const hasTokenizer = containers.some((s) => s.name === `${name}-tokenizer`);
+      const hasLitellm = containers.some((s) => s.name === `${name}-litellm`);
+
+      // Enrich config from the gateway container's env vars
+      try {
+        const { stdout } = await execFileAsync(runtime, [
+          "inspect", name, "--format", "{{range .Config.Env}}{{println .}}{{end}}",
+        ]);
+        const envLines = stdout.split("\n");
+        const envMap: Record<string, string> = {};
+        for (const l of envLines) {
+          const eq = l.indexOf("=");
+          if (eq > 0) envMap[l.slice(0, eq)] = l.slice(eq + 1);
+        }
+
+        if (hasTokenizer) {
+          inst.config.tokenizerEnabled = true;
+          inst.config.tokenizerCredentials = envLines
+            .filter((l: string) => l.startsWith("TOKENIZER_HOSTS_"))
+            .map((l: string) => {
+              const [key, ...rest] = l.split("=");
+              const credName = key.replace("TOKENIZER_HOSTS_", "");
+              return { name: credName, secret: "", allowedHosts: rest.join("=").split(",").filter(Boolean) };
+            });
+        }
+        if (hasLitellm) {
+          inst.config.litellmProxy = true;
+          inst.config.vertexEnabled = true;
+        }
+      } catch { /* ignore */ }
+
+      return inst;
+    }
 
     const volumes = await discoverVolumes(runtime);
     const vol = volumes.find((v) => v.containerName === name);
@@ -747,6 +841,9 @@ async function findInstance(name: string): Promise<DeployResult | null> {
           otelEndpoint: savedVars.OTEL_ENDPOINT || undefined,
           otelExperimentId: savedVars.OTEL_EXPERIMENT_ID || undefined,
           otelImage: savedVars.OTEL_IMAGE || undefined,
+          tokenizerEnabled: savedVars.TOKENIZER_ENABLED === "true" || undefined,
+          tokenizerImage: savedVars.TOKENIZER_IMAGE || undefined,
+          tokenizerCredentials: decodeSavedTokenizerCredentials(savedVars.TOKENIZER_CREDENTIALS_META),
           telegramBotToken: savedVars.TELEGRAM_BOT_TOKEN || undefined,
           telegramAllowFrom: savedVars.TELEGRAM_ALLOW_FROM || undefined,
           sandboxEnabled: savedVars.SANDBOX_ENABLED === "true" || undefined,
@@ -815,6 +912,8 @@ async function findInstance(name: string): Promise<DeployResult | null> {
           : ki.namespace,
         namespace: ki.namespace,
         image: ki.image,
+        tokenizerEnabled: ki.tokenizerEnabled,
+        tokenizerCredentials: ki.tokenizerCredentials,
       },
       startedAt: "",
       url: ki.url || undefined,
@@ -837,5 +936,114 @@ async function findInstance(name: string): Promise<DeployResult | null> {
 
   return null;
 }
+
+// ── Tokenizer credential management (post-install) ────────────────
+// Guard against concurrent credential updates per instance
+const credUpdateLocks = new Set<string>();
+
+// GET /status/:id/tokenizer — current tokenizer credential metadata
+router.get("/:id/tokenizer", async (req, res) => {
+  const instance = await findInstance(req.params.id);
+  if (!instance) {
+    res.status(404).json({ error: "Instance not found" });
+    return;
+  }
+
+  const enabled = !!instance.config.tokenizerEnabled;
+  const credentials = (instance.config.tokenizerCredentials || []).map((c) => ({
+    name: c.name,
+    allowedHosts: c.allowedHosts,
+    headerDst: c.headerDst,
+    headerFmt: c.headerFmt,
+  }));
+
+  res.json({ enabled, credentials });
+});
+
+// PUT /status/:id/tokenizer — update credentials (full replacement + restart)
+router.put("/:id/tokenizer", async (req, res) => {
+  const instance = await findInstance(req.params.id);
+  if (!instance) {
+    res.status(404).json({ error: "Instance not found" });
+    return;
+  }
+
+  if (!instance.config.tokenizerEnabled) {
+    res.status(400).json({ error: "Tokenizer is not enabled on this instance. Enable it by redeploying with tokenizerEnabled=true." });
+    return;
+  }
+
+  const { credentials } = req.body as {
+    credentials: Array<{
+      name: string;
+      secret: string;
+      allowedHosts: string[];
+      headerDst?: string;
+      headerFmt?: string;
+    }>;
+  };
+
+  if (!Array.isArray(credentials)) {
+    res.status(400).json({ error: "Request body must include a credentials array" });
+    return;
+  }
+
+  // Validate new credentials (with secrets) fully. Also validate kept
+  // credentials (empty secret) for name/host correctness — only the
+  // secret requirement is waived since the deployer preserves existing
+  // sealed data.
+  const newCreds = credentials.filter((c: { secret: string }) => c.secret);
+  const keptCreds = credentials.filter((c: { secret: string }) => !c.secret);
+  if (newCreds.length > 0) {
+    const credError = validateTokenizerCredentials(newCreds);
+    if (credError) {
+      res.status(400).json({ error: credError });
+      return;
+    }
+  }
+  for (const c of keptCreds) {
+    if (!c.name || c.name.length > 128) {
+      res.status(400).json({ error: `Kept credential must have a valid name (1-128 chars)` });
+      return;
+    }
+    const hosts = Array.isArray(c.allowedHosts) ? c.allowedHosts.filter((h: string) => h) : [];
+    if (!hosts.length) {
+      res.status(400).json({ error: `Kept credential "${c.name}" must have at least one allowedHosts entry` });
+      return;
+    }
+  }
+  const normalizedCreds = normalizeTokenizerCredentials(credentials);
+
+  // Prevent concurrent credential updates for the same instance
+  if (credUpdateLocks.has(req.params.id)) {
+    res.status(409).json({ error: "A credential update is already in progress for this instance" });
+    return;
+  }
+  credUpdateLocks.add(req.params.id);
+
+  const deployId = `tkz-update-${Date.now()}`;
+  const log = createLogCallback(deployId);
+
+  // Return immediately with the operation ID — progress streams via WebSocket
+  res.status(202).json({ deployId });
+
+  try {
+    const deployer = registry.get(instance.mode);
+    if (!deployer || !deployer.updateTokenizerCredentials) {
+      log(`ERROR: Unsupported mode for credential update: ${instance.mode}`);
+      sendStatus(deployId, "failed");
+      return;
+    }
+    await deployer.updateTokenizerCredentials(instance, normalizedCreds, log);
+    sendStatus(deployId, "running");
+    log("Credential update complete!");
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log(`ERROR: ${message}`);
+    sendStatus(deployId, "failed");
+  } finally {
+    credUpdateLocks.delete(req.params.id);
+  }
+});
 
 export default router;

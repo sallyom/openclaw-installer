@@ -4,6 +4,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { userInfo } from "node:os";
 import type { DeployConfig, DeploySecretRef } from "../deployers/types.js";
 import { validateAgentName } from "../../shared/validate-agent-name.js";
+import { validateTokenizerCredentials, normalizeTokenizerCredentials } from "../deployers/tokenizer.js";
 import { detectGcpDefaults, defaultVertexLocation } from "../services/gcp.js";
 import { namespaceName } from "../deployers/k8s-helpers.js";
 import { registry } from "../deployers/registry.js";
@@ -225,6 +226,16 @@ router.post("/", async (req, res) => {
     if (config.litellmProxy === undefined && config.gcpServiceAccountJson) {
       config.litellmProxy = true;
     }
+  }
+
+  // Validate tokenizer credentials
+  if (config.tokenizerEnabled && config.tokenizerCredentials?.length) {
+    const credError = validateTokenizerCredentials(config.tokenizerCredentials);
+    if (credError) {
+      res.status(400).json({ error: credError });
+      return;
+    }
+    config.tokenizerCredentials = normalizeTokenizerCredentials(config.tokenizerCredentials);
   }
 
   const deployer = registry.get(config.mode);

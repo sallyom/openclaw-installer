@@ -13,6 +13,13 @@ interface PodInfo {
   message: string;
 }
 
+interface TokenizerCredMeta {
+  name: string;
+  allowedHosts: string[];
+  headerDst?: string;
+  headerFmt?: string;
+}
+
 interface Instance {
   id: string;
   mode: string;
@@ -21,6 +28,8 @@ interface Instance {
     prefix: string;
     agentName: string;
     agentDisplayName: string;
+    tokenizerEnabled?: boolean;
+    tokenizerCredentials?: Array<{ name: string; allowedHosts: string[]; secret?: string }>;
   };
   startedAt: string;
   url?: string;
@@ -30,7 +39,18 @@ interface Instance {
   pods?: PodInfo[];
 }
 
-type ExpandedPanel = "connection" | "command" | "logs" | null;
+interface CredentialDraft {
+  key: string;
+  name: string;
+  secret: string;
+  allowedHosts: string;
+  headerDst: string;
+  headerFmt: string;
+  /** True for credentials loaded from the server (secret not editable). */
+  existing?: boolean;
+}
+
+type ExpandedPanel = "connection" | "command" | "logs" | "credentials" | null;
 
 function StatusBadge({ inst, isActing }: { inst: Instance; isActing: boolean }) {
   const badgeColor: Record<string, string> = {
@@ -99,6 +119,8 @@ export default function InstanceList() {
   const [acting, setActing] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, ExpandedPanel>>({});
   const [panelData, setPanelData] = useState<Record<string, string>>({});
+  const [credDrafts, setCredDrafts] = useState<Record<string, CredentialDraft[]>>({});
+  const [credUpdating, setCredUpdating] = useState<string | null>(null);
 
   const fetchInstances = async () => {
     try {
@@ -204,6 +226,32 @@ export default function InstanceList() {
       return;
     }
 
+    if (panel === "credentials") {
+      // Load current credential metadata from the API
+      try {
+        const res = await fetch(`/api/instances/${id}/tokenizer`);
+        if (!res.ok) {
+          alert("Failed to load credential metadata.");
+          return;
+        }
+        const data = await res.json();
+        const existing: CredentialDraft[] = (data.credentials || []).map((c: TokenizerCredMeta) => ({
+          key: crypto.randomUUID(),
+          name: c.name,
+          secret: "",
+          allowedHosts: c.allowedHosts.join(", "),
+          headerDst: c.headerDst || "",
+          headerFmt: c.headerFmt || "",
+          existing: true,
+        }));
+        setCredDrafts((prev) => ({ ...prev, [id]: existing }));
+        setExpanded((prev) => ({ ...prev, [id]: "credentials" }));
+      } catch {
+        alert("Could not connect to the API to load credentials.");
+      }
+      return;
+    }
+
     const endpoint = panel === "connection" ? "token" : panel === "logs" ? "logs" : "command";
     try {
       const res = await fetch(`/api/instances/${id}/${endpoint}`);
@@ -215,6 +263,56 @@ export default function InstanceList() {
       }
     } catch {
       // ignore
+    }
+  };
+
+  const handleUpdateCredentials = async (id: string) => {
+    const drafts = credDrafts[id] || [];
+
+    if (drafts.length === 0 && !confirm("This will remove all credentials. Continue?")) {
+      return;
+    }
+
+    // Validate new credentials — existing ones are already validated server-side.
+    const newDrafts = drafts.filter((d) => !d.existing);
+    const incomplete = newDrafts.filter((d) => !d.name || !d.secret || !d.allowedHosts);
+    if (incomplete.length > 0) {
+      alert("Every new credential must have a name, secret, and at least one allowed host.");
+      return;
+    }
+
+    const credentials = drafts.map((d) => ({
+      name: d.name,
+      secret: d.secret,
+      allowedHosts: d.allowedHosts.split(",").map((h) => h.trim()).filter(Boolean),
+      headerDst: d.headerDst || undefined,
+      headerFmt: d.headerFmt || undefined,
+    }));
+
+    setCredUpdating(id);
+    try {
+      const res = await fetch(`/api/instances/${id}/tokenizer`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credentials }),
+      });
+      if (!res.ok) {
+        let errorMsg = res.statusText;
+        try {
+          const err = await res.json();
+          errorMsg = err.error || errorMsg;
+        } catch {
+          // Response wasn't JSON — use statusText
+        }
+        alert(`Failed to update credentials: ${errorMsg}`);
+      } else {
+        setExpanded((prev) => ({ ...prev, [id]: null }));
+        await fetchInstances();
+      }
+    } catch (err) {
+      alert(`Failed to update credentials: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setCredUpdating(null);
     }
   };
 
@@ -362,6 +460,14 @@ export default function InstanceList() {
                     >
                       {activePanel === "logs" ? "Hide" : "Logs"}
                     </button>
+                    {inst.config.tokenizerEnabled && (
+                      <button
+                        className="btn btn-ghost"
+                        onClick={() => togglePanel(inst.id, "credentials")}
+                      >
+                        {activePanel === "credentials" ? "Hide" : "Credentials"}
+                      </button>
+                    )}
                   </>
                 )}
                 {isK8s && (isRunning || isDeploying || isError) && (
@@ -454,7 +560,175 @@ export default function InstanceList() {
                 ))}
               </div>
             )}
-            {activePanel && activePanel !== "connection" && panelContent && (
+            {activePanel === "credentials" && (
+              <div style={{ padding: "0 1rem 1rem" }}>
+                <div style={{
+                  padding: "0.75rem",
+                  background: "rgba(52, 152, 219, 0.1)",
+                  border: "1px solid rgba(52, 152, 219, 0.3)",
+                  borderRadius: "6px",
+                  fontSize: "0.85rem",
+                  color: "var(--text-secondary)",
+                  marginBottom: "0.75rem",
+                }}>
+                  Manage tokenizer credentials. Add new credentials or remove existing ones.
+                  Changes require a restart which happens automatically.
+                </div>
+
+                {(credDrafts[inst.id] || []).map((cred, idx) => (
+                  <div key={cred.key} style={{
+                    border: "1px solid var(--border)",
+                    borderRadius: "6px",
+                    padding: "0.5rem",
+                    marginBottom: "0.5rem",
+                  }}>
+                    {cred.existing ? (
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                        <span style={{ flex: 1, fontSize: "0.85rem" }}>{cred.name}</span>
+                        <button
+                          className="btn btn-ghost"
+                          aria-label={`Remove credential ${cred.name}`}
+                          style={{ padding: "0.25rem 0.5rem", fontSize: "0.8rem" }}
+                          onClick={() => {
+                            setCredDrafts((prev) => ({
+                              ...prev,
+                              [inst.id]: (prev[inst.id] || []).filter((_, i) => i !== idx),
+                            }));
+                          }}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.25rem" }}>
+                          <input
+                            type="text"
+                            name={`cred-name-${inst.id}-${idx}`}
+                            aria-label={`Credential ${idx + 1} name`}
+                            placeholder={"Name (e.g. github)\u2026"}
+                            value={cred.name}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setCredDrafts((prev) => {
+                                const updated = [...(prev[inst.id] || [])];
+                                updated[idx] = { ...updated[idx], name: val };
+                                return { ...prev, [inst.id]: updated };
+                              });
+                            }}
+                            style={{ flex: 1, padding: "0.25rem 0.5rem", fontSize: "0.85rem" }}
+                          />
+                          <button
+                            className="btn btn-ghost"
+                            aria-label={`Remove credential ${cred.name || idx + 1}`}
+                            style={{ padding: "0.25rem 0.5rem", fontSize: "0.8rem" }}
+                            onClick={() => {
+                              setCredDrafts((prev) => ({
+                                ...prev,
+                                [inst.id]: (prev[inst.id] || []).filter((_, i) => i !== idx),
+                              }));
+                            }}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                        <input
+                          type="password"
+                          name={`cred-secret-${inst.id}-${idx}`}
+                          aria-label={`Credential ${cred.name || idx + 1} secret`}
+                          autoComplete="new-password"
+                          spellCheck={false}
+                          placeholder={"API key or token\u2026"}
+                          value={cred.secret}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setCredDrafts((prev) => {
+                              const updated = [...(prev[inst.id] || [])];
+                              updated[idx] = { ...updated[idx], secret: val };
+                              return { ...prev, [inst.id]: updated };
+                            });
+                          }}
+                          style={{ width: "100%", padding: "0.25rem 0.5rem", fontSize: "0.85rem", marginBottom: "0.25rem" }}
+                        />
+                        <input
+                          type="text"
+                          name={`cred-hosts-${inst.id}-${idx}`}
+                          aria-label={`Credential ${cred.name || idx + 1} allowed hosts`}
+                          placeholder={"Allowed hosts (e.g. api.github.com)\u2026"}
+                          value={cred.allowedHosts}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setCredDrafts((prev) => {
+                              const updated = [...(prev[inst.id] || [])];
+                              updated[idx] = { ...updated[idx], allowedHosts: val };
+                              return { ...prev, [inst.id]: updated };
+                            });
+                          }}
+                          style={{ width: "100%", padding: "0.25rem 0.5rem", fontSize: "0.85rem", marginBottom: "0.25rem" }}
+                        />
+                        <div style={{ display: "flex", gap: "0.5rem" }}>
+                          <input
+                            type="text"
+                            name={`cred-header-dst-${inst.id}-${idx}`}
+                            aria-label={`Credential ${cred.name || idx + 1} header name`}
+                            placeholder={"Header name (default: Authorization)\u2026"}
+                            value={cred.headerDst}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setCredDrafts((prev) => {
+                                const updated = [...(prev[inst.id] || [])];
+                                updated[idx] = { ...updated[idx], headerDst: val };
+                                return { ...prev, [inst.id]: updated };
+                              });
+                            }}
+                            style={{ flex: 1, padding: "0.25rem 0.5rem", fontSize: "0.85rem" }}
+                          />
+                          <input
+                            type="text"
+                            name={`cred-header-fmt-${inst.id}-${idx}`}
+                            aria-label={`Credential ${cred.name || idx + 1} header format`}
+                            placeholder={"Header format (default: Bearer %s)\u2026"}
+                            value={cred.headerFmt}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setCredDrafts((prev) => {
+                                const updated = [...(prev[inst.id] || [])];
+                                updated[idx] = { ...updated[idx], headerFmt: val };
+                                return { ...prev, [inst.id]: updated };
+                              });
+                            }}
+                            style={{ flex: 1, padding: "0.25rem 0.5rem", fontSize: "0.85rem" }}
+                          />
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ))}
+
+                <div style={{ display: "flex", gap: "0.5rem" }}>
+                  <button
+                    className="btn btn-ghost"
+                    style={{ flex: 1 }}
+                    onClick={() => {
+                      setCredDrafts((prev) => ({
+                        ...prev,
+                        [inst.id]: [...(prev[inst.id] || []), { key: crypto.randomUUID(), name: "", secret: "", allowedHosts: "", headerDst: "", headerFmt: "" }],
+                      }));
+                    }}
+                  >
+                    + Add Credential
+                  </button>
+                  <button
+                    className="btn btn-primary"
+                    disabled={credUpdating === inst.id}
+                    onClick={() => handleUpdateCredentials(inst.id)}
+                  >
+                    {credUpdating === inst.id ? "Applying\u2026" : "Apply Changes"}
+                  </button>
+                </div>
+              </div>
+            )}
+            {activePanel && activePanel !== "connection" && activePanel !== "credentials" && panelContent && (
               <div
                 style={{
                   padding: "0 1rem 1rem",

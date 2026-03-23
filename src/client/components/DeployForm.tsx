@@ -253,8 +253,17 @@ export default function DeployForm({ onDeployStarted }: Props) {
     otelJaeger: false,
     otelEndpoint: "",
     otelExperimentId: "",
+    // Tokenizer proxy
+    tokenizerEnabled: false,
+    tokenizerCredentials: [] as Array<{
+      key: string;
+      name: string;
+      secret: string;
+      allowedHosts: string;
+      headerDst: string;
+      headerFmt: string;
+    }>,
   });
-
   const [gcpDefaults, setGcpDefaults] = useState<GcpDefaults | null>(null);
   const [gcpDefaultsFetched, setGcpDefaultsFetched] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -747,6 +756,18 @@ export default function DeployForm({ onDeployStarted }: Props) {
         otelExperimentId: config.otelEnabled ? trimToUndefined(config.otelExperimentId) : undefined,
         cronEnabled: config.cronEnabled || undefined,
         subagentPolicy: config.subagentPolicy !== "none" ? config.subagentPolicy : undefined,
+        tokenizerEnabled: config.tokenizerEnabled || undefined,
+        tokenizerCredentials: config.tokenizerEnabled && config.tokenizerCredentials.length > 0
+          ? config.tokenizerCredentials
+              .filter((c) => c.name && c.secret && c.allowedHosts)
+              .map((c) => ({
+                name: c.name,
+                secret: c.secret,
+                allowedHosts: c.allowedHosts.split(",").map((h) => h.trim()).filter(Boolean),
+                headerDst: c.headerDst || undefined,
+                headerFmt: c.headerFmt || undefined,
+              }))
+          : undefined,
       };
 
       const res = await fetch("/api/deploy", {
@@ -756,11 +777,14 @@ export default function DeployForm({ onDeployStarted }: Props) {
       });
 
       const data = await res.json();
-      if (data.deployId) {
+      if (!res.ok) {
+        alert(`Deploy failed: ${data.error || res.statusText}`);
+      } else if (data.deployId) {
         onDeployStarted(data.deployId);
       }
     } catch (err) {
       console.error("Deploy failed:", err);
+      alert(`Deploy failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setDeploying(false);
     }
@@ -913,6 +937,17 @@ export default function DeployForm({ onDeployStarted }: Props) {
   }
   if (config.telegramBotTokenRefId.trim() && !telegramBotTokenRef) {
     validationErrors.push("Telegram SecretRef requires source, provider, and id.");
+  }
+  if (config.tokenizerEnabled && config.tokenizerCredentials.filter((c) => c.name && c.secret && c.allowedHosts).length === 0) {
+    validationErrors.push("Tokenizer is enabled but no valid credentials are configured. Add at least one credential with a name, secret, and allowed hosts.");
+  }
+  if (config.tokenizerEnabled && config.tokenizerCredentials.length > 0) {
+    const credNames = config.tokenizerCredentials
+      .filter((c) => c.name)
+      .map((c) => c.name.toUpperCase().replace(/[^A-Z0-9]/g, "_"));
+    if (new Set(credNames).size !== credNames.length) {
+      validationErrors.push("Tokenizer credential names must be unique (after normalization to uppercase).");
+    }
   }
 
   const isValid = validationErrors.length === 0;
@@ -1594,6 +1629,186 @@ export default function DeployForm({ onDeployStarted }: Props) {
                 Only needed for MLflow endpoints. Sets the x-mlflow-experiment-id header on exported traces.
               </div>
             </div>
+          </>
+        )}
+
+        <h3 style={{ marginTop: "1.5rem" }}>Credential Proxy</h3>
+
+        <div className="form-group">
+          <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <input
+              type="checkbox"
+              checked={config.tokenizerEnabled}
+              onChange={(e) =>
+                setConfig((prev) => ({ ...prev, tokenizerEnabled: e.target.checked }))
+              }
+              style={{ width: "auto" }}
+            />
+            Enable Tokenizer proxy (credential injection)
+          </label>
+          <div className="hint">
+            Runs a <a href="https://github.com/NickCao/tokenizer" target="_blank" rel="noreferrer">Tokenizer</a> sidecar
+            that injects API credentials into HTTP requests. The agent never sees the raw secrets.
+          </div>
+        </div>
+
+        {config.tokenizerEnabled && (
+          <>
+            <div style={{
+              marginBottom: "1rem",
+              padding: "0.75rem",
+              background: "rgba(52, 152, 219, 0.1)",
+              border: "1px solid rgba(52, 152, 219, 0.3)",
+              borderRadius: "6px",
+              fontSize: "0.85rem",
+              color: "var(--text-secondary)",
+            }}>
+              Add API credentials below. Each credential is encrypted and can only be used
+              against its allowed hosts. The agent receives sealed tokens and a skill
+              explaining how to make authenticated requests through the proxy.
+            </div>
+
+            {config.tokenizerCredentials.map((cred, idx) => (
+              <div key={cred.key} style={{
+                border: "1px solid var(--border)",
+                borderRadius: "6px",
+                padding: "0.75rem",
+                marginBottom: "0.5rem",
+              }}>
+                <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.5rem" }}>
+                  <input
+                    type="text"
+                    name={`cred-name-${idx}`}
+                    aria-label={`Credential ${idx + 1} name`}
+                    placeholder={"Name (e.g. github)\u2026"}
+                    value={cred.name}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setConfig((prev) => {
+                        const updated = [...prev.tokenizerCredentials];
+                        updated[idx] = { ...updated[idx], name: val };
+                        return { ...prev, tokenizerCredentials: updated };
+                      });
+                    }}
+                    style={{ flex: 1 }}
+                  />
+                  <button
+                    type="button"
+                    aria-label={`Remove credential ${cred.name || idx + 1}`}
+                    onClick={() => {
+                      setConfig((prev) => ({
+                        ...prev,
+                        tokenizerCredentials: prev.tokenizerCredentials.filter((_, i) => i !== idx),
+                      }));
+                    }}
+                    style={{
+                      background: "transparent",
+                      border: "1px solid var(--border)",
+                      borderRadius: "4px",
+                      padding: "0.25rem 0.5rem",
+                      cursor: "pointer",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+                <input
+                  type="password"
+                  name={`cred-secret-${idx}`}
+                  aria-label={`Credential ${cred.name || idx + 1} secret`}
+                  autoComplete="new-password"
+                  spellCheck={false}
+                  placeholder={"API key or token\u2026"}
+                  value={cred.secret}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setConfig((prev) => {
+                      const updated = [...prev.tokenizerCredentials];
+                      updated[idx] = { ...updated[idx], secret: val };
+                      return { ...prev, tokenizerCredentials: updated };
+                    });
+                  }}
+                  style={{ width: "100%", marginBottom: "0.5rem" }}
+                />
+                <input
+                  type="text"
+                  name={`cred-hosts-${idx}`}
+                  aria-label={`Credential ${cred.name || idx + 1} allowed hosts`}
+                  placeholder={"api.github.com, api.stripe.com\u2026"}
+                  value={cred.allowedHosts}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setConfig((prev) => {
+                      const updated = [...prev.tokenizerCredentials];
+                      updated[idx] = { ...updated[idx], allowedHosts: val };
+                      return { ...prev, tokenizerCredentials: updated };
+                    });
+                  }}
+                  style={{ width: "100%", marginBottom: "0.25rem" }}
+                />
+                <small style={{ color: "var(--text-secondary)", fontSize: "0.8rem" }}>{"Hostnames only \u2014 no https:// prefix or paths"}</small>
+                <div style={{ display: "flex", gap: "0.5rem" }}>
+                  <input
+                    type="text"
+                    name={`cred-header-dst-${idx}`}
+                    aria-label={`Credential ${cred.name || idx + 1} header name`}
+                    placeholder={"Header name (default: Authorization)\u2026"}
+                    value={cred.headerDst}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setConfig((prev) => {
+                        const updated = [...prev.tokenizerCredentials];
+                        updated[idx] = { ...updated[idx], headerDst: val };
+                        return { ...prev, tokenizerCredentials: updated };
+                      });
+                    }}
+                    style={{ flex: 1 }}
+                  />
+                  <input
+                    type="text"
+                    name={`cred-header-fmt-${idx}`}
+                    aria-label={`Credential ${cred.name || idx + 1} header format`}
+                    placeholder={"Header format (default: Bearer %s)\u2026"}
+                    value={cred.headerFmt}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setConfig((prev) => {
+                        const updated = [...prev.tokenizerCredentials];
+                        updated[idx] = { ...updated[idx], headerFmt: val };
+                        return { ...prev, tokenizerCredentials: updated };
+                      });
+                    }}
+                    style={{ flex: 1 }}
+                  />
+                </div>
+              </div>
+            ))}
+
+            <button
+              type="button"
+              onClick={() => {
+                setConfig((prev) => ({
+                  ...prev,
+                  tokenizerCredentials: [
+                    ...prev.tokenizerCredentials,
+                    { key: crypto.randomUUID(), name: "", secret: "", allowedHosts: "", headerDst: "", headerFmt: "" },
+                  ],
+                }));
+              }}
+              style={{
+                background: "transparent",
+                border: "1px dashed var(--border)",
+                borderRadius: "6px",
+                padding: "0.5rem 1rem",
+                cursor: "pointer",
+                color: "var(--text-secondary)",
+                width: "100%",
+                marginBottom: "1rem",
+              }}
+            >
+              + Add Credential
+            </button>
           </>
         )}
 

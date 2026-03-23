@@ -6,13 +6,14 @@ import { v4 as uuid } from "uuid";
 import { coreApi, appsApi, loadKubeConfig, hasOtelOperator, k8sApiHttpCode } from "../services/k8s.js";
 import { ensureK8sPortForward } from "../services/k8s-port-forward.js";
 import { cronJobsFile, installerK8sInstanceDir, skillsDir } from "../paths.js";
-import { loadTextTree } from "../state-tree.js";
+import { loadTextTree, type TreeEntry } from "../state-tree.js";
 import type {
   Deployer,
   DeployConfig,
   DeployResult,
   LogCallback,
 } from "./types.js";
+import { redactConfig } from "./types.js";
 import { namespaceName, agentId, generateToken } from "./k8s-helpers.js";
 import { loadWorkspaceFiles } from "./k8s-agent.js";
 import { loadAgentSourceCronJobs, loadAgentSourceWorkspaceTree } from "./agent-source.js";
@@ -32,6 +33,18 @@ import {
 } from "./k8s-manifests.js";
 import { shouldUseLitellmProxy, generateLitellmMasterKey, generateLitellmConfig } from "./litellm.js";
 import { shouldUseOtel, generateOtelConfig, generateOtelConfigObject } from "./otel.js";
+import {
+  shouldUseTokenizer,
+  generateTokenizerOpenKey,
+  deriveTokenizerSealKey,
+  sealCredential,
+  tokenizerAgentEnv,
+  tokenizerSecretKeys,
+  sanitizeCredName,
+  generateTokenizerSkill,
+  validateTokenizerCredentials,
+  normalizeTokenizerCredentials,
+} from "./tokenizer.js";
 
 // Re-export discovery for consumers
 export type { K8sPodInfo, K8sInstance } from "./k8s-discovery.js";
@@ -113,7 +126,7 @@ export class KubernetesDeployer implements Deployer {
 
     // Load workspace files (prefers user-customized from ~/.openclaw/workspace-*)
     const { files: workspaceFiles } = loadWorkspaceFiles(config, log);
-    const skillEntries = await loadTextTree(skillsDir()).catch(() => []);
+    const skillEntries: TreeEntry[] = await loadTextTree(skillsDir()).catch(() => []);
     const agentTreeEntries = await loadAgentSourceWorkspaceTree(config.agentSourceDir).catch(() => []);
     const cronJobsContent = loadAgentSourceCronJobs(config.agentSourceDir)
       ?? await readFile(cronJobsFile(), "utf8").catch(() => undefined);
@@ -158,6 +171,34 @@ export class KubernetesDeployer implements Deployer {
       "ConfigMap openclaw-agent-tree",
       log,
     );
+
+    // 4a-tkz. Tokenizer proxy config — process BEFORE the skills ConfigMap so the
+    //         tokenizer skill entry is included when the ConfigMap is applied.
+    const useTkz = shouldUseTokenizer(config);
+    let tokenizerData: { openKey: string; agentEnv: Record<string, string> } | undefined;
+
+    if (useTkz && config.tokenizerCredentials?.length) {
+      // Validate and normalize credentials before sealing
+      const deployCredError = validateTokenizerCredentials(config.tokenizerCredentials);
+      if (deployCredError) {
+        throw new Error(`Invalid tokenizer credentials: ${deployCredError}`);
+      }
+      const normalizedDeployCreds = normalizeTokenizerCredentials(config.tokenizerCredentials) as
+        Array<{ name: string; secret: string; allowedHosts: string[]; headerDst?: string; headerFmt?: string }>;
+
+      log("Tokenizer proxy enabled — credentials will be sealed and injected by the proxy sidecar");
+      const openKey = generateTokenizerOpenKey();
+      const sealKey = deriveTokenizerSealKey(openKey);
+      const sealed = normalizedDeployCreds.map((c) => sealCredential(c, sealKey));
+      tokenizerData = {
+        openKey,
+        agentEnv: tokenizerAgentEnv(sealed, sealKey),
+      };
+
+      // Add the Tokenizer skill to skillEntries before the ConfigMap is created
+      const skillMd = generateTokenizerSkill(sealed);
+      skillEntries.push({ key: "tkz-skill", path: "tokenizer/SKILL.md", content: skillMd });
+    }
 
     const skillsCm = fileTreeConfigMapManifest(ns, "openclaw-skills", skillEntries);
     await applyResource(
@@ -255,7 +296,7 @@ export class KubernetesDeployer implements Deployer {
     }
 
     // 5. Secret
-    const secret = secretManifest(ns, config, gatewayToken, litellmMasterKey);
+    const secret = secretManifest(ns, config, gatewayToken, litellmMasterKey, tokenizerData);
     await applyResource(
       () => core.readNamespacedSecret({ name: "openclaw-secrets", namespace: ns }),
       () => core.createNamespacedSecret({ namespace: ns, body: secret }),
@@ -319,6 +360,11 @@ export class KubernetesDeployer implements Deployer {
         anthropicApiKeyRef: config.anthropicApiKeyRef,
         openaiApiKeyRef: config.openaiApiKeyRef,
         telegramBotTokenRef: config.telegramBotTokenRef,
+        // Keep tokenizer structure but strip raw secrets
+        tokenizerCredentials: config.tokenizerCredentials?.map((c) => ({
+          ...c,
+          secret: "(set)",
+        })),
       };
       writeFileSync(
         join(configDir, "deploy-config.json"),
@@ -335,7 +381,7 @@ export class KubernetesDeployer implements Deployer {
       id,
       mode: "kubernetes",
       status: "running",
-      config: { ...config, namespace: ns },
+      config: redactConfig({ ...config, namespace: ns }),
       startedAt: new Date().toISOString(),
       url,
       containerId: ns,
@@ -406,12 +452,27 @@ export class KubernetesDeployer implements Deployer {
 
     // Load workspace files from ~/.openclaw/workspace-*
     const { files: workspaceFiles, fromHost } = loadWorkspaceFiles(result.config, log);
-    const skillEntries = await loadTextTree(skillsDir()).catch(() => []);
+    const skillEntries: TreeEntry[] = await loadTextTree(skillsDir()).catch(() => []);
     const agentTreeEntries = await loadAgentSourceWorkspaceTree(result.config.agentSourceDir).catch(() => []);
     const cronJobsContent = loadAgentSourceCronJobs(result.config.agentSourceDir)
       ?? await readFile(cronJobsFile(), "utf8").catch(() => undefined);
     if (!fromHost) {
       log("No custom agent files found — using generated defaults");
+    }
+
+    // Preserve tokenizer skill entries from the existing ConfigMap (these are
+    // generated dynamically and don't exist on the host filesystem).
+    try {
+      const existingSkillsCm = await core.readNamespacedConfigMap({ name: "openclaw-skills", namespace: ns });
+      if (existingSkillsCm.data) {
+        for (const [key, content] of Object.entries(existingSkillsCm.data)) {
+          if (key.startsWith("tkz-skill")) {
+            skillEntries.push({ key, path: "tokenizer/SKILL.md", content });
+          }
+        }
+      }
+    } catch {
+      // ConfigMap may not exist yet
     }
 
     // Update the agent ConfigMap
@@ -459,6 +520,34 @@ export class KubernetesDeployer implements Deployer {
       .map((f) => `cp /agents/${f} /home/node/.openclaw/workspace-${id}/${f} 2>/dev/null || true`)
       .join("\n");
 
+    // Read current Deployment to find volume indices by name and to
+    // preserve tokenizer init container env vars (they vary depending on
+    // which optional sidecars were enabled at deploy time).
+    const currentDeploy = await apps.readNamespacedDeployment({ name: "openclaw", namespace: ns });
+    const volumes = currentDeploy.spec?.template?.spec?.volumes ?? [];
+    const volIndex = (name: string): number => {
+      const idx = volumes.findIndex((v) => v.name === name);
+      if (idx === -1) throw new Error(`Volume '${name}' not found in Deployment`);
+      return idx;
+    };
+
+    // Preserve tokenizer init script lines from the existing init container.
+    // The init container writes TOKENIZER_* env vars into the agent's .env
+    // file; without these lines the agent loses credential access after redeploy.
+    const existingInitContainer = currentDeploy.spec?.template?.spec?.initContainers?.[0];
+    const existingInitEnv = existingInitContainer?.env ?? [];
+    const tkzEnvKeys = existingInitEnv
+      .filter((e) => e.name?.startsWith("TOKENIZER_"))
+      .map((e) => e.name!);
+
+    const tokenizerInitLines = tkzEnvKeys.length > 0 ? [
+      `if [ -f '/home/node/.openclaw/workspace-${id}/.env' ]; then sed -i '/^TOKENIZER_/d' '/home/node/.openclaw/workspace-${id}/.env'; fi`,
+      ...tkzEnvKeys.map((k) =>
+        `printf '%s=%s\\n' '${k}' "$${k}" >> /home/node/.openclaw/workspace-${id}/.env`,
+      ),
+      `chmod 600 /home/node/.openclaw/workspace-${id}/.env`,
+    ] : [];
+
     const initScript = `
 cp /config/openclaw.json /home/node/.openclaw/openclaw.json
 chmod 644 /home/node/.openclaw/openclaw.json
@@ -470,21 +559,30 @@ ${copyLines}
 find /agents-tree -mindepth 1 -type d -name 'workspace-*' -exec sh -c 'base="$(basename "$1")"; if [ "$base" = "workspace-main" ]; then dest="/home/node/.openclaw/workspace-${id}"; else dest="/home/node/.openclaw/$base"; fi; mkdir -p "$dest"; cp -r "$1"/* "$dest"/ 2>/dev/null || true' _ {} \\;
 cp -r /skills-src/. /home/node/.openclaw/skills/ 2>/dev/null || true
 cp /cron-src/jobs.json /home/node/.openclaw/cron/jobs.json 2>/dev/null || true
+${tokenizerInitLines.join("\n")}
 chgrp -R 0 /home/node/.openclaw 2>/dev/null || true
 chmod -R g=u /home/node/.openclaw 2>/dev/null || true
 echo "Config initialized"
 `.trim();
 
-    // Use JSON Patch to update the init container command and restart annotation
-    const patches = [
+    // Use JSON Patch to update the init container command (and env if
+    // tokenizer vars are present) and restart annotation.
+    const patches: Array<{ op: string; path: string; value: unknown }> = [
       {
         op: "replace",
         path: "/spec/template/spec/initContainers/0/command",
         value: ["sh", "-c", initScript],
       },
+      // Preserve the init container's env (tokenizer secretKeyRef entries) so
+      // the init script can write TOKENIZER_* vars into the agent's .env.
+      ...(existingInitEnv.length > 0 ? [{
+        op: "replace",
+        path: "/spec/template/spec/initContainers/0/env",
+        value: existingInitEnv,
+      }] : []),
       {
         op: "replace",
-        path: "/spec/template/spec/volumes/3/configMap",
+        path: `/spec/template/spec/volumes/${volIndex("skills-config")}/configMap`,
         value: {
           name: "openclaw-skills",
           ...(skillEntries.length > 0
@@ -494,7 +592,7 @@ echo "Config initialized"
       },
       {
         op: "replace",
-        path: "/spec/template/spec/volumes/4/configMap",
+        path: `/spec/template/spec/volumes/${volIndex("cron-config")}/configMap`,
         value: {
           name: "openclaw-cron",
           ...(cronJobsContent !== undefined
@@ -504,7 +602,7 @@ echo "Config initialized"
       },
       {
         op: "replace",
-        path: "/spec/template/spec/volumes/5/configMap",
+        path: `/spec/template/spec/volumes/${volIndex("agent-tree-config")}/configMap`,
         value: {
           name: "openclaw-agent-tree",
           ...(agentTreeEntries.length > 0
@@ -526,6 +624,243 @@ echo "Config initialized"
     log("Agent files updated and pod restarting");
   }
 
+  /**
+   * Update tokenizer credentials on a running K8s instance.
+   * Generates fresh keys, seals all credentials, updates Secret + ConfigMap,
+   * and triggers a rollout restart.
+   */
+  async updateTokenizerCredentials(
+    result: DeployResult,
+    credentials: Array<{ name: string; secret?: string; allowedHosts: string[]; headerDst?: string; headerFmt?: string }>,
+    log: LogCallback,
+  ): Promise<void> {
+    const ns = result.config.namespace || result.containerId || "";
+    const core = coreApi();
+    const apps = appsApi();
+
+    // Read existing secret so we can preserve unchanged credentials.
+    log("Reading existing Secret...");
+    const existingSecret = await core.readNamespacedSecret({ name: "openclaw-secrets", namespace: ns });
+    const existingData = existingSecret.data || {};
+
+    // For credentials with an empty secret, carry forward the existing sealed
+    // token and bearer password so users don't have to re-enter unchanged secrets.
+    const newCreds = credentials.filter(
+      (c): c is typeof c & { secret: string } => Boolean(c.secret),
+    );
+    const keptCreds = credentials.filter((c) => !c.secret);
+    for (const c of keptCreds) {
+      const k = sanitizeCredName(c.name);
+      if (!existingData[`TOKENIZER_CRED_${k}`] || !existingData[`TOKENIZER_AUTH_${k}`]) {
+        throw new Error(`Credential "${c.name}" has no secret and no existing sealed data to preserve`);
+      }
+    }
+
+    // Validate only the credentials that carry new secrets
+    if (newCreds.length > 0) {
+      const credError = validateTokenizerCredentials(newCreds);
+      if (credError) {
+        throw new Error(`Invalid tokenizer credentials: ${credError}`);
+      }
+    }
+    const normalizedNewCreds = normalizeTokenizerCredentials(newCreds);
+    const normalizedKeptCreds = normalizeTokenizerCredentials(keptCreds);
+
+    log("Updating tokenizer credentials...");
+
+    // When preserving existing credentials, reuse the same open key so that
+    // the preserved sealed blobs remain decryptable by the tokenizer sidecar.
+    // A fresh key is only generated when ALL credentials are new.
+    let openKey: string;
+    if (normalizedKeptCreds.length > 0 && existingData?.TOKENIZER_OPEN_KEY) {
+      // Existing data values are base64-encoded by K8s — decode the open key
+      openKey = Buffer.from(existingData.TOKENIZER_OPEN_KEY, "base64").toString();
+      log("Reusing existing open key for preserved credentials");
+    } else {
+      openKey = generateTokenizerOpenKey();
+    }
+    const sealKey = deriveTokenizerSealKey(openKey);
+    const sealed = normalizedNewCreds.map((c) => sealCredential(c, sealKey));
+    const agentEnv = tokenizerAgentEnv(sealed, sealKey);
+
+    // Carry forward non-tokenizer data and preserved credentials' sealed data
+    const preservedData: Record<string, string> = {};
+    if (existingData) {
+      for (const [k, v] of Object.entries(existingData)) {
+        if (!k.startsWith("TOKENIZER_")) {
+          preservedData[k] = v; // keep original base64 encoding
+        }
+      }
+    }
+    // Preserve sealed tokens and auth for kept credentials
+    for (const c of normalizedKeptCreds) {
+      const k = sanitizeCredName(c.name);
+      preservedData[`TOKENIZER_CRED_${k}`] = existingData[`TOKENIZER_CRED_${k}`];
+      preservedData[`TOKENIZER_AUTH_${k}`] = existingData[`TOKENIZER_AUTH_${k}`];
+      if (existingData[`TOKENIZER_HOSTS_${k}`]) {
+        preservedData[`TOKENIZER_HOSTS_${k}`] = existingData[`TOKENIZER_HOSTS_${k}`];
+      }
+    }
+
+    // Add new tokenizer data via stringData (Kubernetes encodes these to base64 on apply)
+    const newStringData: Record<string, string> = {
+      TOKENIZER_OPEN_KEY: openKey,
+      ...agentEnv,
+    };
+
+    const updatedSecret: k8s.V1Secret = {
+      apiVersion: "v1",
+      kind: "Secret",
+      metadata: {
+        name: "openclaw-secrets",
+        namespace: ns,
+        labels: { app: "openclaw" },
+        // Preserve resourceVersion for optimistic concurrency control —
+        // without it, Kubernetes may reject the replace or silently overwrite
+        // concurrent changes.
+        resourceVersion: existingSecret.metadata?.resourceVersion,
+      },
+      data: preservedData,
+      stringData: newStringData,
+    };
+    await core.replaceNamespacedSecret({ name: "openclaw-secrets", namespace: ns, body: updatedSecret });
+    log("Secret updated");
+
+    // Update the tokenizer skill inside the existing openclaw-skills ConfigMap.
+    // Include both newly sealed and kept credentials so the generated SKILL.md
+    // documents all available credentials, not just newly added ones.
+    const allCredsForSkill: import("./tokenizer.js").SealedCredential[] = [
+      ...sealed,
+      ...normalizedKeptCreds.map((c) => ({
+        name: c.name,
+        allowedHosts: typeof c.allowedHosts === "string" ? [c.allowedHosts] : c.allowedHosts,
+        sealedToken: "",
+        bearerPassword: "",
+      })),
+    ];
+    const skillMd = generateTokenizerSkill(allCredsForSkill);
+    log("Updating tokenizer skill in openclaw-skills ConfigMap...");
+    const skillEntries: TreeEntry[] = await loadTextTree(skillsDir()).catch(() => []);
+    // Remove any previous tokenizer skill entries and add the fresh one
+    const filtered = skillEntries.filter((e) => !e.key.startsWith("tkz-skill"));
+    filtered.push({ key: "tkz-skill", path: "tokenizer/SKILL.md", content: skillMd });
+
+    const skillsCm = fileTreeConfigMapManifest(ns, "openclaw-skills", filtered);
+    await applyResource(
+      () => core.readNamespacedConfigMap({ name: "openclaw-skills", namespace: ns }),
+      () => core.createNamespacedConfigMap({ namespace: ns, body: skillsCm }),
+      () => core.replaceNamespacedConfigMap({ name: "openclaw-skills", namespace: ns, body: skillsCm }),
+      "ConfigMap openclaw-skills",
+      log,
+    );
+
+    // Read current Deployment to find volume indices by name and update env vars
+    log("Restarting deployment...");
+    const currentDeploy = await apps.readNamespacedDeployment({ name: "openclaw", namespace: ns });
+    const volumes = currentDeploy.spec?.template?.spec?.volumes ?? [];
+    const skillsVolIdx = volumes.findIndex((v) => v.name === "skills-config");
+    if (skillsVolIdx === -1) throw new Error("Volume 'skills-config' not found in Deployment");
+
+    // Build the updated env var list for the gateway container: keep all
+    // non-tokenizer env vars, then append the new tokenizer secret refs.
+    const containers = currentDeploy.spec?.template?.spec?.containers ?? [];
+    const gwIdx = containers.findIndex((c) => c.name === "gateway");
+    const gwEnv = gwIdx !== -1 ? (containers[gwIdx].env ?? []) : [];
+    const nonTkzEnv = gwEnv.filter((e) => !e.name.startsWith("TOKENIZER_"));
+    const allCreds = [...normalizedNewCreds, ...normalizedKeptCreds];
+    const newTkzKeys = ["TOKENIZER_PROXY_URL", "TOKENIZER_SEAL_KEY"];
+    for (const c of allCreds) {
+      const k = sanitizeCredName(c.name);
+      newTkzKeys.push(`TOKENIZER_CRED_${k}`, `TOKENIZER_AUTH_${k}`, `TOKENIZER_HOSTS_${k}`);
+    }
+    const updatedEnv = [
+      ...nonTkzEnv,
+      ...newTkzKeys.map((key) => ({
+        name: key,
+        valueFrom: { secretKeyRef: { name: "openclaw-secrets", key, optional: true } },
+      })),
+    ];
+
+    // Also update the init container env vars so the .env file is correct on restart
+    const initContainers = currentDeploy.spec?.template?.spec?.initContainers ?? [];
+    const initIdx = initContainers.findIndex((c) => c.name === "init-config");
+    const initEnv = initIdx !== -1 ? (initContainers[initIdx].env ?? []) : [];
+    const nonTkzInitEnv = initEnv.filter((e) => !e.name.startsWith("TOKENIZER_"));
+    const updatedInitEnv = [
+      ...nonTkzInitEnv,
+      ...newTkzKeys.map((key) => ({
+        name: key,
+        valueFrom: { secretKeyRef: { name: "openclaw-secrets", key, optional: true } },
+      })),
+    ];
+
+    const patches: Array<Record<string, unknown>> = [
+      {
+        op: "replace",
+        path: `/spec/template/spec/volumes/${skillsVolIdx}/configMap`,
+        value: {
+          name: "openclaw-skills",
+          items: filtered.map((entry) => ({ key: entry.key, path: entry.path })),
+        },
+      },
+      {
+        op: "replace",
+        path: "/spec/template/metadata/annotations/openclaw.io~1restart-at",
+        value: new Date().toISOString(),
+      },
+    ];
+
+    // Patch gateway env vars if the gateway container exists
+    if (gwIdx !== -1) {
+      patches.push({
+        op: "replace",
+        path: `/spec/template/spec/containers/${gwIdx}/env`,
+        value: updatedEnv,
+      });
+    }
+
+    // Patch init container env vars if the init container exists
+    if (initIdx !== -1) {
+      patches.push({
+        op: "replace",
+        path: `/spec/template/spec/initContainers/${initIdx}/env`,
+        value: updatedInitEnv,
+      });
+    }
+
+    try {
+      await apps.patchNamespacedDeployment(
+        { name: "openclaw", namespace: ns, body: patches },
+        k8s.setHeaderOptions("Content-Type", k8s.PatchStrategy.JsonPatch),
+      );
+    } catch (patchErr) {
+      // Deployment patch failed — attempt to restore the original Secret so the
+      // cluster doesn't end up with a Secret that doesn't match the running Deployment.
+      log("Deployment patch failed; rolling back Secret to previous version...");
+      try {
+        await core.replaceNamespacedSecret({ name: "openclaw-secrets", namespace: ns, body: existingSecret });
+        log("Secret rollback succeeded");
+      } catch (rollbackErr) {
+        log(`Secret rollback also failed: ${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}`);
+      }
+      throw patchErr;
+    }
+
+    // Update the saved deploy config
+    try {
+      const configDir = installerK8sInstanceDir(ns);
+      const configPath = join(configDir, "deploy-config.json");
+      const saved = JSON.parse(await readFile(configPath, "utf8"));
+      saved.tokenizerEnabled = true;
+      saved.tokenizerCredentials = allCreds.map((c: { name: string; allowedHosts: string[]; headerDst?: string; headerFmt?: string }) => ({ ...c, secret: "(set)" }));
+      writeFileSync(configPath, JSON.stringify(saved, null, 2), { mode: 0o600 });
+    } catch {
+      log("Could not update saved deploy config");
+    }
+
+    log("Tokenizer credentials updated — pod restarting");
+  }
+
   async teardown(result: DeployResult, log: LogCallback): Promise<void> {
     const ns = result.config.namespace || result.containerId || "";
     const core = coreApi();
@@ -545,6 +880,7 @@ echo "Config initialized"
       { name: "ConfigMap openclaw-cron", fn: () => core.deleteNamespacedConfigMap({ name: "openclaw-cron", namespace: ns }) },
       { name: "ConfigMap litellm-config", fn: () => core.deleteNamespacedConfigMap({ name: "litellm-config", namespace: ns }) },
       { name: "ConfigMap otel-collector-config", fn: () => core.deleteNamespacedConfigMap({ name: "otel-collector-config", namespace: ns }) },
+
       { name: "OpenTelemetryCollector openclaw-sidecar", fn: async () => {
         const customApi = loadKubeConfig().makeApiClient(k8s.CustomObjectsApi);
         await customApi.deleteNamespacedCustomObject({
