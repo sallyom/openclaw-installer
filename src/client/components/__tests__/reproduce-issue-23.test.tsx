@@ -51,11 +51,11 @@ function mockFetch() {
 }
 
 function getProviderSelect() {
-  return screen.getByText("Provider").closest(".form-group")!.querySelector("select")! as HTMLSelectElement;
+  return screen.getByText("Primary Provider").closest(".form-group")!.querySelector("select")! as HTMLSelectElement;
 }
 
 function getModelInput() {
-  return screen.getByText("Model").closest(".form-group")!.querySelector("input")! as HTMLInputElement;
+  return screen.getByText("Primary Model").closest(".form-group")!.querySelector("input")! as HTMLInputElement;
 }
 
 describe("Issue #23: Custom model override carries over across providers", () => {

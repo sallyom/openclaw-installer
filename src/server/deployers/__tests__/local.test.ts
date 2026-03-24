@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { shouldAlwaysPull } from "../local.js";
+import { applyGatewayRuntimeConfig, shouldAlwaysPull } from "../local.js";
 
 describe("shouldAlwaysPull", () => {
   it("returns true for :latest tag", () => {
@@ -36,5 +36,58 @@ describe("shouldAlwaysPull", () => {
 
   it("returns false for digest reference", () => {
     expect(shouldAlwaysPull("quay.io/sallyom/openclaw@sha256:abcdef1234567890")).toBe(false);
+  });
+});
+
+describe("applyGatewayRuntimeConfig", () => {
+  it("enables OpenAI-compatible HTTP endpoints while preserving gateway config", () => {
+    const updated = applyGatewayRuntimeConfig({
+      gateway: {
+        mode: "local",
+        auth: { mode: "token", token: "abc" },
+        controlUi: { enabled: true },
+      },
+    }, 18789) as {
+      gateway?: {
+        auth?: { token?: string };
+        controlUi?: { allowedOrigins?: string[] };
+        http?: {
+          endpoints?: {
+            chatCompletions?: { enabled?: boolean };
+            responses?: { enabled?: boolean };
+          };
+        };
+      };
+    };
+
+    expect(updated.gateway?.auth?.token).toBe("abc");
+    expect(updated.gateway?.http?.endpoints?.chatCompletions?.enabled).toBe(true);
+    expect(updated.gateway?.http?.endpoints?.responses?.enabled).toBe(true);
+    expect(updated.gateway?.controlUi?.allowedOrigins).toEqual([
+      "http://localhost:18789",
+      "http://127.0.0.1:18789",
+    ]);
+  });
+
+  it("can disable OpenAI-compatible HTTP endpoints while preserving gateway config", () => {
+    const updated = applyGatewayRuntimeConfig({
+      gateway: {
+        mode: "local",
+        auth: { mode: "token", token: "abc" },
+        controlUi: { enabled: true },
+      },
+    }, 18789, false) as {
+      gateway?: {
+        http?: {
+          endpoints?: {
+            chatCompletions?: { enabled?: boolean };
+            responses?: { enabled?: boolean };
+          };
+        };
+      };
+    };
+
+    expect(updated.gateway?.http?.endpoints?.chatCompletions?.enabled).toBe(false);
+    expect(updated.gateway?.http?.endpoints?.responses?.enabled).toBe(false);
   });
 });

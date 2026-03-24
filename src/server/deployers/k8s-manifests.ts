@@ -4,6 +4,7 @@ import {
   agentId,
   tryParseProjectId,
   buildOpenClawConfig,
+  usesDefaultEnvSecretRef,
 } from "./k8s-helpers.js";
 import type { DeployConfig } from "./types.js";
 import { shouldUseLitellmProxy, LITELLM_IMAGE, LITELLM_PORT } from "./litellm.js";
@@ -131,10 +132,17 @@ export function secretManifest(ns: string, config: DeployConfig, gatewayToken: s
   const data: Record<string, string> = {
     OPENCLAW_GATEWAY_TOKEN: gatewayToken,
   };
-  if (config.anthropicApiKey && !config.anthropicApiKeyRef) data.ANTHROPIC_API_KEY = config.anthropicApiKey;
-  if (config.openaiApiKey && !config.openaiApiKeyRef) data.OPENAI_API_KEY = config.openaiApiKey;
+  if (config.anthropicApiKey && (!config.anthropicApiKeyRef || usesDefaultEnvSecretRef(config.anthropicApiKeyRef))) {
+    data.ANTHROPIC_API_KEY = config.anthropicApiKey;
+  }
+  if (config.openaiApiKey && (!config.openaiApiKeyRef || usesDefaultEnvSecretRef(config.openaiApiKeyRef))) {
+    data.OPENAI_API_KEY = config.openaiApiKey;
+  }
   if (config.modelEndpoint) data.MODEL_ENDPOINT = config.modelEndpoint;
-  if (config.telegramBotToken && !config.telegramBotTokenRef) data.TELEGRAM_BOT_TOKEN = config.telegramBotToken;
+  if (config.modelEndpointApiKey) data.MODEL_ENDPOINT_API_KEY = config.modelEndpointApiKey;
+  if (config.telegramBotToken && (!config.telegramBotTokenRef || usesDefaultEnvSecretRef(config.telegramBotTokenRef))) {
+    data.TELEGRAM_BOT_TOKEN = config.telegramBotToken;
+  }
 
   // Resolve project ID from config or from the SA JSON
   const projectId = config.googleCloudProject
@@ -211,6 +219,7 @@ export function deploymentManifest(
     // to Anthropic/OpenAI, so don't leak API keys into the gateway env.
     ...(!useProxy ? ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"] : []),
     "MODEL_ENDPOINT",
+    "MODEL_ENDPOINT_API_KEY",
     "TELEGRAM_BOT_TOKEN",
     // In proxy mode LiteLLM gets project/location from its config.yaml;
     // the gateway doesn't need them.

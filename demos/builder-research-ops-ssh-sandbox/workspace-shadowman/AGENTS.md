@@ -1,5 +1,5 @@
 ---
-name: main
+name: Shadowman
 description: Orchestrator for a sandboxed builder, research, and ops team
 ---
 

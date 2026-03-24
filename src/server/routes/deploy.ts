@@ -36,11 +36,44 @@ function normalizeSecretRef(ref: DeploySecretRef | undefined): DeploySecretRef |
   return { source, provider, id };
 }
 
+export function applyServerEnvFallbacks(config: DeployConfig, env: NodeJS.ProcessEnv = process.env): void {
+  if (!config.image && env.OPENCLAW_IMAGE) {
+    config.image = env.OPENCLAW_IMAGE;
+  }
+  if (!config.anthropicApiKey && !config.anthropicApiKeyRef && env.ANTHROPIC_API_KEY) {
+    config.anthropicApiKey = env.ANTHROPIC_API_KEY;
+  }
+  if (!config.openaiApiKey && !config.openaiApiKeyRef && env.OPENAI_API_KEY) {
+    config.openaiApiKey = env.OPENAI_API_KEY;
+  }
+  if (!config.modelEndpoint && config.inferenceProvider === "custom-endpoint" && env.MODEL_ENDPOINT) {
+    config.modelEndpoint = env.MODEL_ENDPOINT;
+  }
+  if (config.modelEndpoint && !config.modelEndpointApiKey && env.MODEL_ENDPOINT_API_KEY) {
+    config.modelEndpointApiKey = env.MODEL_ENDPOINT_API_KEY;
+  }
+  if (config.telegramEnabled) {
+    if (!config.telegramBotToken && !config.telegramBotTokenRef && env.TELEGRAM_BOT_TOKEN) {
+      config.telegramBotToken = env.TELEGRAM_BOT_TOKEN;
+    }
+    if (!config.telegramAllowFrom && env.TELEGRAM_ALLOW_FROM) {
+      config.telegramAllowFrom = env.TELEGRAM_ALLOW_FROM;
+    }
+  }
+  if (config.vertexEnabled === undefined && env.VERTEX_ENABLED === "true") {
+    config.vertexEnabled = true;
+    config.vertexProvider = (env.VERTEX_PROVIDER as "google" | "anthropic") || "anthropic";
+    config.googleCloudProject = config.googleCloudProject || env.GOOGLE_CLOUD_PROJECT || "";
+    config.googleCloudLocation = config.googleCloudLocation || env.GOOGLE_CLOUD_LOCATION || "";
+  }
+}
+
 router.post("/", async (req, res) => {
   const config = req.body as DeployConfig;
 
   config.image = trimOptional(config.image);
   config.modelEndpoint = trimOptional(config.modelEndpoint);
+  config.modelEndpointApiKey = trimOptional(config.modelEndpointApiKey);
   config.googleCloudProject = trimOptional(config.googleCloudProject);
   config.googleCloudLocation = trimOptional(config.googleCloudLocation);
   config.gcpServiceAccountJson = trimOptional(config.gcpServiceAccountJson);
@@ -116,47 +149,8 @@ router.post("/", async (req, res) => {
     config.prefix = process.env.OPENCLAW_PREFIX || userInfo().username;
   }
 
-  // Fall back to server environment for image and API keys
-  if (!config.image && process.env.OPENCLAW_IMAGE) {
-    config.image = process.env.OPENCLAW_IMAGE;
-  }
-  if (
-    config.inferenceProvider === "anthropic"
-    && !config.anthropicApiKey
-    && !config.anthropicApiKeyRef
-    && process.env.ANTHROPIC_API_KEY
-  ) {
-    config.anthropicApiKey = process.env.ANTHROPIC_API_KEY;
-  }
-  if (
-    (config.inferenceProvider === "openai" || config.inferenceProvider === "custom-endpoint")
-    && !config.openaiApiKey
-    && !config.openaiApiKeyRef
-    && process.env.OPENAI_API_KEY
-  ) {
-    config.openaiApiKey = process.env.OPENAI_API_KEY;
-  }
-  if (
-    config.inferenceProvider === "custom-endpoint"
-    && !config.modelEndpoint
-    && process.env.MODEL_ENDPOINT
-  ) {
-    config.modelEndpoint = process.env.MODEL_ENDPOINT;
-  }
-  if (config.telegramEnabled) {
-    if (!config.telegramBotToken && !config.telegramBotTokenRef && process.env.TELEGRAM_BOT_TOKEN) {
-      config.telegramBotToken = process.env.TELEGRAM_BOT_TOKEN;
-    }
-    if (!config.telegramAllowFrom && process.env.TELEGRAM_ALLOW_FROM) {
-      config.telegramAllowFrom = process.env.TELEGRAM_ALLOW_FROM;
-    }
-  }
-  if (config.vertexEnabled === undefined && process.env.VERTEX_ENABLED === "true") {
-    config.vertexEnabled = true;
-    config.vertexProvider = (process.env.VERTEX_PROVIDER as "google" | "anthropic") || "anthropic";
-    config.googleCloudProject = config.googleCloudProject || process.env.GOOGLE_CLOUD_PROJECT || "";
-    config.googleCloudLocation = config.googleCloudLocation || process.env.GOOGLE_CLOUD_LOCATION || "";
-  }
+  // Fall back to server environment for image and credentials.
+  applyServerEnvFallbacks(config);
 
   if (!config.inferenceProvider) {
     if (config.vertexEnabled) {

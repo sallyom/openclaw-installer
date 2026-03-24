@@ -55,7 +55,9 @@ export interface DeployConfig {
   openaiApiKey?: string;
   inferenceProvider?: InferenceProvider;
   agentModel?: string;
+  openaiCompatibleEndpointsEnabled?: boolean;
   modelEndpoint?: string;
+  modelEndpointApiKey?: string;
   // Vertex AI
   vertexEnabled?: boolean;
   vertexProvider?: "google" | "anthropic"; // google = Gemini, anthropic = Claude via Vertex

@@ -205,4 +205,139 @@ describe("DeployForm agent name validation (issue #7)", () => {
     expect(screen.getByText("OpenAI SecretRef Source")).toBeTruthy();
     expect(screen.getByText("Telegram SecretRef Source")).toBeTruthy();
   });
+
+  it("submits Anthropic and OpenAI credentials together while keeping one primary provider", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/health") {
+        return {
+          ok: true,
+          json: async () => ({
+            status: "ok",
+            containerRuntime: "podman",
+            k8sAvailable: false,
+            k8sContext: "",
+            k8sNamespace: "",
+            isOpenShift: false,
+            version: "0.1.0",
+            deployers: [
+              { mode: "local", title: "This Machine", description: "Run locally", available: true, priority: 0, builtIn: true },
+            ],
+            defaults: {
+              hasAnthropicKey: false,
+              hasOpenaiKey: false,
+              hasTelegramToken: false,
+              telegramAllowFrom: "",
+              modelEndpoint: "",
+              prefix: "testuser",
+              image: "",
+            },
+          }),
+        };
+      }
+      if (url === "/api/deploy") {
+        return {
+          ok: true,
+          json: async () => ({ deployId: "deploy-123" }),
+        };
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    global.fetch = fetchMock as typeof global.fetch;
+
+    const onDeployStarted = vi.fn();
+    render(<DeployForm onDeployStarted={onDeployStarted} />);
+
+    await screen.findAllByRole("button", { name: /deploy openclaw/i });
+
+    fireEvent.change(screen.getAllByPlaceholderText("e.g., lynx")[0], { target: { value: "lynx" } });
+    fireEvent.change(screen.getByPlaceholderText("sk-ant-..."), { target: { value: "sk-ant-demo" } });
+    fireEvent.change(screen.getByPlaceholderText("sk-..."), { target: { value: "sk-openai-demo" } });
+    fireEvent.change(
+      screen.getByPlaceholderText("http://vllm.openclaw-llms.svc.cluster.local/v1"),
+      { target: { value: "http://localhost:8000/v1" } },
+    );
+    fireEvent.change(
+      screen.getByPlaceholderText("Optional bearer token for the endpoint"),
+      { target: { value: "endpoint-token" } },
+    );
+
+    fireEvent.click(screen.getAllByRole("button", { name: /deploy openclaw/i }).at(-1)!);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/deploy",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const deployCall = fetchMock.mock.calls.find(([url]) => String(url) === "/api/deploy");
+    expect(deployCall).toBeTruthy();
+    const body = JSON.parse(String((deployCall?.[1] as RequestInit | undefined)?.body || "{}"));
+
+    expect(body.inferenceProvider).toBe("anthropic");
+    expect(body.anthropicApiKey).toBe("sk-ant-demo");
+    expect(body.openaiApiKey).toBe("sk-openai-demo");
+    expect(body.modelEndpoint).toBe("http://localhost:8000/v1");
+    expect(body.modelEndpointApiKey).toBe("endpoint-token");
+  });
+
+  it("submits the OpenAI-compatible endpoints toggle when disabled", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/health") {
+        return {
+          ok: true,
+          json: async () => ({
+            status: "ok",
+            containerRuntime: "podman",
+            k8sAvailable: false,
+            k8sContext: "",
+            k8sNamespace: "",
+            isOpenShift: false,
+            version: "0.1.0",
+            deployers: [
+              { mode: "local", title: "This Machine", description: "Run locally", available: true, priority: 0, builtIn: true },
+            ],
+            defaults: {
+              hasAnthropicKey: false,
+              hasOpenaiKey: false,
+              hasTelegramToken: false,
+              telegramAllowFrom: "",
+              modelEndpoint: "",
+              prefix: "testuser",
+              image: "",
+            },
+          }),
+        };
+      }
+      if (url === "/api/deploy") {
+        return {
+          ok: true,
+          json: async () => ({ deployId: "deploy-123" }),
+        };
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    global.fetch = fetchMock as typeof global.fetch;
+
+    render(<DeployForm onDeployStarted={() => {}} />);
+
+    await screen.findAllByRole("button", { name: /deploy openclaw/i });
+
+    fireEvent.change(screen.getAllByPlaceholderText("e.g., lynx")[0], { target: { value: "lynx" } });
+    fireEvent.click(screen.getByLabelText("Enable OpenAI-compatible API endpoints"));
+    fireEvent.click(screen.getAllByRole("button", { name: /deploy openclaw/i }).at(-1)!);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/deploy",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const deployCall = fetchMock.mock.calls.find(([url]) => String(url) === "/api/deploy");
+    const body = JSON.parse(String((deployCall?.[1] as RequestInit | undefined)?.body || "{}"));
+    expect(body.openaiCompatibleEndpointsEnabled).toBe(false);
+  });
 });

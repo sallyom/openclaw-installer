@@ -137,6 +137,9 @@ router.get("/", async (req, res) => {
               telegramBotTokenRef: decodeSavedJson<DeploySecretRef>(savedVars.TELEGRAM_BOT_TOKEN_REF_B64),
               anthropicApiKey: savedVars.ANTHROPIC_API_KEY || undefined,
               openaiApiKey: savedVars.OPENAI_API_KEY || undefined,
+              openaiCompatibleEndpointsEnabled:
+                savedVars.OPENAI_COMPATIBLE_ENDPOINTS_ENABLED === "false" ? false : undefined,
+              modelEndpointApiKey: savedVars.MODEL_ENDPOINT_API_KEY || undefined,
               telegramBotToken: savedVars.TELEGRAM_BOT_TOKEN || undefined,
               telegramAllowFrom: savedVars.TELEGRAM_ALLOW_FROM || undefined,
               sandboxEnabled: savedVars.SANDBOX_ENABLED === "true" || undefined,
@@ -758,6 +761,9 @@ async function findInstance(name: string): Promise<DeployResult | null> {
           telegramBotTokenRef: decodeSavedJson<DeploySecretRef>(savedVars.TELEGRAM_BOT_TOKEN_REF_B64),
           anthropicApiKey: savedVars.ANTHROPIC_API_KEY || undefined,
           openaiApiKey: savedVars.OPENAI_API_KEY || undefined,
+          openaiCompatibleEndpointsEnabled:
+            savedVars.OPENAI_COMPATIBLE_ENDPOINTS_ENABLED === "false" ? false : undefined,
+          modelEndpointApiKey: savedVars.MODEL_ENDPOINT_API_KEY || undefined,
           agentModel: savedVars.AGENT_MODEL || undefined,
           modelEndpoint: savedVars.MODEL_ENDPOINT || undefined,
           agentSourceDir: savedVars.AGENT_SOURCE_DIR || undefined,

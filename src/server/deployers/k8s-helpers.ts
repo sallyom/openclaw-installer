@@ -50,6 +50,10 @@ export function generateToken(): string {
   return randomBytes(32).toString("base64");
 }
 
+export function usesDefaultEnvSecretRef(ref?: DeploySecretRef): ref is DeploySecretRef {
+  return Boolean(ref?.source === "env" && ref.provider.trim() === "default" && ref.id.trim());
+}
+
 export function normalizeModelRef(config: DeployConfig, modelRef: string): string {
   const trimmed = modelRef.trim();
   if (!trimmed) return trimmed;
@@ -164,18 +168,25 @@ function attachSecretHandlingConfig(ocConfig: Record<string, unknown>, config: D
     : shouldAutoEnvRef(config, config.openaiApiKeyRef, config.openaiApiKey)
       ? envSecretRef("OPENAI_API_KEY")
       : undefined;
+  const modelEndpointApiKeyRef = config.modelEndpointApiKey ? envSecretRef("MODEL_ENDPOINT_API_KEY") : undefined;
   if (openaiApiKeyRef) {
     if (openaiApiKeyRef.source === "env" && openaiApiKeyRef.provider === "default") {
       shouldDefineDefaultEnvProvider = true;
     }
-    if (config.modelEndpoint?.trim()) {
-      const openaiProvider: Record<string, unknown> = {
-        ...((providersMap.openai as Record<string, unknown> | undefined) || {}),
-        apiKey: cloneSecretRef(openaiApiKeyRef),
-      };
-      openaiProvider.baseUrl = config.modelEndpoint.trim();
-      providersMap.openai = openaiProvider;
+  }
+  if (modelEndpointApiKeyRef) {
+    shouldDefineDefaultEnvProvider = true;
+  }
+  if (config.modelEndpoint?.trim()) {
+    const providerApiKeyRef = modelEndpointApiKeyRef || openaiApiKeyRef;
+    const openaiProvider: Record<string, unknown> = {
+      ...((providersMap.openai as Record<string, unknown> | undefined) || {}),
+      baseUrl: config.modelEndpoint.trim(),
+    };
+    if (providerApiKeyRef) {
+      openaiProvider.apiKey = cloneSecretRef(providerApiKeyRef);
     }
+    providersMap.openai = openaiProvider;
   }
 
   if (Object.keys(providersMap).length > 0) {
@@ -210,6 +221,7 @@ function attachSecretHandlingConfig(ocConfig: Record<string, unknown>, config: D
 export function buildOpenClawConfig(config: DeployConfig, gatewayToken: string): object {
   const id = agentId(config);
   const model = deriveModel(config);
+  const openaiCompatibleEndpointsEnabled = config.openaiCompatibleEndpointsEnabled !== false;
   const sourceBundle = loadAgentSourceBundle(config);
   const controlUi: Record<string, unknown> = {
     enabled: true,
@@ -237,6 +249,12 @@ export function buildOpenClawConfig(config: DeployConfig, gatewayToken: string):
     gateway: {
       mode: "local",
       auth: { mode: "token", token: gatewayToken },
+      http: {
+        endpoints: {
+          chatCompletions: { enabled: openaiCompatibleEndpointsEnabled },
+          responses: { enabled: openaiCompatibleEndpointsEnabled },
+        },
+      },
       controlUi,
     },
     agents: {

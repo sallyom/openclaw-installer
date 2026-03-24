@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { buildOpenClawConfig, deriveModel, namespaceName, normalizeModelRef, sanitizeForRfc1123 } from "../k8s-helpers.js";
+import {
+  buildOpenClawConfig,
+  deriveModel,
+  namespaceName,
+  normalizeModelRef,
+  sanitizeForRfc1123,
+  usesDefaultEnvSecretRef,
+} from "../k8s-helpers.js";
 import type { DeployConfig } from "../types.js";
 
 function makeConfig(overrides: Partial<DeployConfig> = {}): DeployConfig {
@@ -12,6 +19,12 @@ function makeConfig(overrides: Partial<DeployConfig> = {}): DeployConfig {
 }
 
 describe("model config generation", () => {
+  it("detects runtime-backed default env SecretRefs", () => {
+    expect(usesDefaultEnvSecretRef({ source: "env", provider: "default", id: "OPENAI_API_KEY" })).toBe(true);
+    expect(usesDefaultEnvSecretRef({ source: "env", provider: "vault", id: "OPENAI_API_KEY" })).toBe(false);
+    expect(usesDefaultEnvSecretRef({ source: "exec", provider: "default", id: "OPENAI_API_KEY" })).toBe(false);
+  });
+
   it("never deploys into the default namespace implicitly", () => {
     const config = makeConfig({
       prefix: "alice",
@@ -61,6 +74,26 @@ describe("model config generation", () => {
     expect(rendered.agents?.defaults?.models).toEqual({
       "anthropic/claude-sonnet-4-6": { alias: "claude-sonnet-4-6" },
     });
+  });
+
+  it("can disable OpenAI-compatible gateway endpoints in generated config", () => {
+    const config = makeConfig({
+      openaiCompatibleEndpointsEnabled: false,
+    });
+
+    const rendered = buildOpenClawConfig(config, "gateway-token") as {
+      gateway?: {
+        http?: {
+          endpoints?: {
+            chatCompletions?: { enabled?: boolean };
+            responses?: { enabled?: boolean };
+          };
+        };
+      };
+    };
+
+    expect(rendered.gateway?.http?.endpoints?.chatCompletions?.enabled).toBe(false);
+    expect(rendered.gateway?.http?.endpoints?.responses?.enabled).toBe(false);
   });
 
   it("writes the display name into the default agent identity", () => {
@@ -182,6 +215,33 @@ describe("model config generation", () => {
       id: "TELEGRAM_BOT_TOKEN",
     });
     expect(rendered.channels?.telegram?.allowFrom).toEqual([12345]);
+  });
+
+  it("uses a dedicated endpoint token when a model endpoint is configured", () => {
+    const config = makeConfig({
+      inferenceProvider: "anthropic",
+      anthropicApiKey: "anthropic-key",
+      openaiApiKey: "openai-key",
+      modelEndpoint: "http://localhost:8000/v1",
+      modelEndpointApiKey: "endpoint-token",
+    });
+
+    const rendered = buildOpenClawConfig(config, "gateway-token") as {
+      models?: {
+        providers?: Record<string, { apiKey?: unknown; baseUrl?: string }>;
+      };
+      secrets?: { providers?: Record<string, unknown> };
+    };
+
+    expect(rendered.models?.providers?.openai?.baseUrl).toBe("http://localhost:8000/v1");
+    expect(rendered.models?.providers?.openai?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MODEL_ENDPOINT_API_KEY",
+    });
+    expect(rendered.secrets?.providers).toMatchObject({
+      default: { source: "env" },
+    });
   });
 
   it("auto-generates env SecretRefs for supported cluster secrets without an invalid plain OpenAI provider stub", () => {

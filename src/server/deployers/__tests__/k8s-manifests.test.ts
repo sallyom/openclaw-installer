@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deploymentManifest, fileConfigMapManifest, fileTreeConfigMapManifest } from "../k8s-manifests.js";
+import { deploymentManifest, fileConfigMapManifest, fileTreeConfigMapManifest, secretManifest } from "../k8s-manifests.js";
 import type { DeployConfig } from "../types.js";
 import type * as k8s from "@kubernetes/client-node";
 
@@ -102,6 +102,29 @@ describe("gateway env vars in proxy mode", () => {
 
     expect(envNames).toContain("ANTHROPIC_API_KEY");
     expect(envNames).toContain("OPENAI_API_KEY");
+  });
+
+  it("materializes default env SecretRefs into the backing Secret data", () => {
+    const config = makeConfig({
+      inferenceProvider: "openai",
+      openaiApiKey: "sk-oai-test",
+      openaiApiKeyRef: {
+        source: "env",
+        provider: "default",
+        id: "OPENAI_API_KEY",
+      },
+      telegramBotToken: "123:abc",
+      telegramBotTokenRef: {
+        source: "env",
+        provider: "default",
+        id: "TELEGRAM_BOT_TOKEN",
+      },
+    });
+
+    const secret = secretManifest("ns", config, "gateway-token");
+
+    expect(secret.stringData?.OPENAI_API_KEY).toBe("sk-oai-test");
+    expect(secret.stringData?.TELEGRAM_BOT_TOKEN).toBe("123:abc");
   });
 
   it("excludes GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION when proxy is active", () => {

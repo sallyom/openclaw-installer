@@ -13,7 +13,7 @@ import type {
   DeployResult,
   LogCallback,
 } from "./types.js";
-import { namespaceName, agentId, generateToken } from "./k8s-helpers.js";
+import { namespaceName, agentId, generateToken, usesDefaultEnvSecretRef } from "./k8s-helpers.js";
 import { loadWorkspaceFiles } from "./k8s-agent.js";
 import { loadAgentSourceCronJobs, loadAgentSourceWorkspaceTree } from "./agent-source.js";
 import {
@@ -310,10 +310,20 @@ export class KubernetesDeployer implements Deployer {
         ...config,
         namespace: ns,
         // Strip secret values — they're in the cluster, not needed on disk
-        anthropicApiKey: config.anthropicApiKey ? "(set)" : undefined,
-        openaiApiKey: config.openaiApiKey ? "(set)" : undefined,
+        anthropicApiKey:
+          config.anthropicApiKey && (!config.anthropicApiKeyRef || usesDefaultEnvSecretRef(config.anthropicApiKeyRef))
+            ? config.anthropicApiKey
+            : (config.anthropicApiKey ? "(set)" : undefined),
+        openaiApiKey:
+          config.openaiApiKey && (!config.openaiApiKeyRef || usesDefaultEnvSecretRef(config.openaiApiKeyRef))
+            ? config.openaiApiKey
+            : (config.openaiApiKey ? "(set)" : undefined),
+        modelEndpointApiKey: config.modelEndpointApiKey || undefined,
         gcpServiceAccountJson: config.gcpServiceAccountJson ? "(set)" : undefined,
-        telegramBotToken: config.telegramBotToken ? "(set)" : undefined,
+        telegramBotToken:
+          config.telegramBotToken && (!config.telegramBotTokenRef || usesDefaultEnvSecretRef(config.telegramBotTokenRef))
+            ? config.telegramBotToken
+            : (config.telegramBotToken ? "(set)" : undefined),
         secretsProvidersJson: config.secretsProvidersJson,
         anthropicApiKeyRef: config.anthropicApiKeyRef,
         openaiApiKeyRef: config.openaiApiKeyRef,

@@ -33,7 +33,12 @@ import { shouldUseOtel, OTEL_HTTP_PORT } from "./otel.js";
 import { startOtelSidecar, stopOtelSidecar, startJaegerSidecar, otelContainerName, jaegerContainerName } from "./local-otel.js";
 import { JAEGER_UI_PORT } from "./otel.js";
 import { agentWorkspaceDir, installerLocalInstanceDir, openclawHomeDir } from "../paths.js";
-import { buildDefaultAgentModelCatalog, generateToken, normalizeModelRef } from "./k8s-helpers.js";
+import {
+  buildDefaultAgentModelCatalog,
+  generateToken,
+  normalizeModelRef,
+  usesDefaultEnvSecretRef,
+} from "./k8s-helpers.js";
 import { buildSandboxConfig } from "./sandbox.js";
 import { buildSandboxToolPolicy } from "./tool-policy.js";
 import { loadAgentSourceBundle } from "./agent-source.js";
@@ -56,6 +61,39 @@ export function shouldAlwaysPull(image: string): boolean {
   const ref = image.split("/").pop() || image;
   const tag = ref.includes(":") ? ref.split(":").pop() : undefined;
   return !tag || tag === "latest";
+}
+
+export function applyGatewayRuntimeConfig(
+  config: Record<string, unknown>,
+  port: number,
+  openaiCompatibleEndpointsEnabled = true,
+): Record<string, unknown> {
+  const gateway = ((config.gateway as Record<string, unknown> | undefined) || {});
+  const controlUi = ((gateway.controlUi as Record<string, unknown> | undefined) || {});
+  const http = ((gateway.http as Record<string, unknown> | undefined) || {});
+  const endpoints = ((http.endpoints as Record<string, unknown> | undefined) || {});
+
+  return {
+    ...config,
+    gateway: {
+      ...gateway,
+      http: {
+        ...http,
+        endpoints: {
+          ...endpoints,
+          chatCompletions: { enabled: openaiCompatibleEndpointsEnabled },
+          responses: { enabled: openaiCompatibleEndpointsEnabled },
+        },
+      },
+      controlUi: {
+        ...controlUi,
+        allowedOrigins: [
+          `http://localhost:${port}`,
+          `http://127.0.0.1:${port}`,
+        ],
+      },
+    },
+  };
 }
 
 function resolveImage(config: DeployConfig): string {
@@ -208,18 +246,25 @@ function attachSecretHandlingConfig(ocConfig: Record<string, unknown>, config: D
     : shouldAutoEnvRef(config.openaiApiKeyRef, config.openaiApiKey)
       ? envSecretRef("OPENAI_API_KEY")
       : undefined;
+  const modelEndpointApiKeyRef = config.modelEndpointApiKey ? envSecretRef("MODEL_ENDPOINT_API_KEY") : undefined;
   if (openaiApiKeyRef) {
     if (openaiApiKeyRef.source === "env" && openaiApiKeyRef.provider === "default") {
       shouldDefineDefaultEnvProvider = true;
     }
-    if (config.modelEndpoint?.trim()) {
-      const openaiProvider: Record<string, unknown> = {
-        ...((providersMap.openai as Record<string, unknown> | undefined) || {}),
-        apiKey: cloneSecretRef(openaiApiKeyRef),
-      };
-      openaiProvider.baseUrl = config.modelEndpoint.trim();
-      providersMap.openai = openaiProvider;
+  }
+  if (modelEndpointApiKeyRef) {
+    shouldDefineDefaultEnvProvider = true;
+  }
+  if (config.modelEndpoint?.trim()) {
+    const providerApiKeyRef = modelEndpointApiKeyRef || openaiApiKeyRef;
+    const openaiProvider: Record<string, unknown> = {
+      ...((providersMap.openai as Record<string, unknown> | undefined) || {}),
+      baseUrl: config.modelEndpoint.trim(),
+    };
+    if (providerApiKeyRef) {
+      openaiProvider.apiKey = cloneSecretRef(providerApiKeyRef);
     }
+    providersMap.openai = openaiProvider;
   }
 
   if (Object.keys(providersMap).length > 0) {
@@ -266,6 +311,7 @@ function buildOpenClawConfig(config: DeployConfig, gatewayToken: string): string
   const agentId = `${config.prefix || "openclaw"}_${config.agentName}`;
   const model = deriveModel(config);
   const port = config.port ?? 18789;
+  const openaiCompatibleEndpointsEnabled = config.openaiCompatibleEndpointsEnabled !== false;
   const useOtel = shouldUseOtel(config);
   const sourceBundle = loadAgentSourceBundle(config);
   const ocConfig: Record<string, unknown> = {
@@ -291,6 +337,12 @@ function buildOpenClawConfig(config: DeployConfig, gatewayToken: string): string
       auth: {
         mode: "token",
         token: gatewayToken,
+      },
+      http: {
+        endpoints: {
+          chatCompletions: { enabled: openaiCompatibleEndpointsEnabled },
+          responses: { enabled: openaiCompatibleEndpointsEnabled },
+        },
       },
       controlUi: {
         enabled: true,
@@ -593,14 +645,25 @@ function buildRunArgs(
 
   // Fix for #6: in proxy mode the gateway talks to LiteLLM, not directly
   // to Anthropic/OpenAI, so don't expose API keys to the gateway.
-  if (!useProxy && effectiveConfig.anthropicApiKey && !effectiveConfig.anthropicApiKeyRef) {
+  if (
+    !useProxy
+    && effectiveConfig.anthropicApiKey
+    && (!effectiveConfig.anthropicApiKeyRef || usesDefaultEnvSecretRef(effectiveConfig.anthropicApiKeyRef))
+  ) {
     env.ANTHROPIC_API_KEY = effectiveConfig.anthropicApiKey;
   }
-  if (!useProxy && effectiveConfig.openaiApiKey && !effectiveConfig.openaiApiKeyRef) {
+  if (
+    !useProxy
+    && effectiveConfig.openaiApiKey
+    && (!effectiveConfig.openaiApiKeyRef || usesDefaultEnvSecretRef(effectiveConfig.openaiApiKeyRef))
+  ) {
     env.OPENAI_API_KEY = effectiveConfig.openaiApiKey;
   }
   if (effectiveConfig.modelEndpoint) {
     env.MODEL_ENDPOINT = effectiveConfig.modelEndpoint;
+  }
+  if (effectiveConfig.modelEndpointApiKey) {
+    env.MODEL_ENDPOINT_API_KEY = effectiveConfig.modelEndpointApiKey;
   }
 
   if (effectiveConfig.vertexEnabled && useProxy) {
@@ -623,7 +686,10 @@ function buildRunArgs(
     }
   }
 
-  if (effectiveConfig.telegramBotToken && !effectiveConfig.telegramBotTokenRef) {
+  if (
+    effectiveConfig.telegramBotToken
+    && (!effectiveConfig.telegramBotTokenRef || usesDefaultEnvSecretRef(effectiveConfig.telegramBotTokenRef))
+  ) {
     env.TELEGRAM_BOT_TOKEN = effectiveConfig.telegramBotToken;
   }
   if (effectiveConfig.sandboxEnabled) {
@@ -785,7 +851,7 @@ something that requires the user's attention.`;
       // Write openclaw.json only if missing (don't overwrite live config)
       `test -f /home/node/.openclaw/openclaw.json || echo '${esc(ocConfig)}' > /home/node/.openclaw/openclaw.json`,
       // Always update allowedOrigins to match the current port (fixes re-deploy with different port)
-      `node -e "const fs=require('fs');const p='/home/node/.openclaw/openclaw.json';const c=JSON.parse(fs.readFileSync(p,'utf8'));if(c.gateway&&c.gateway.controlUi){c.gateway.controlUi.allowedOrigins=['http://localhost:${port}','http://127.0.0.1:${port}'];fs.writeFileSync(p,JSON.stringify(c,null,2))}"`,
+      `node -e "const fs=require('fs');const p='/home/node/.openclaw/openclaw.json';const c=JSON.parse(fs.readFileSync(p,'utf8'));c.gateway ||= {};c.gateway.http ||= {};c.gateway.http.endpoints ||= {};c.gateway.http.endpoints.chatCompletions={enabled:${config.openaiCompatibleEndpointsEnabled !== false}};c.gateway.http.endpoints.responses={enabled:${config.openaiCompatibleEndpointsEnabled !== false}};c.gateway.controlUi ||= {};c.gateway.controlUi.allowedOrigins=['http://localhost:${port}','http://127.0.0.1:${port}'];fs.writeFileSync(p,JSON.stringify(c,null,2))"`,
       // Materialize SSH sandbox auth files into the writable volume for the node user.
       `mkdir -p '${SANDBOX_SSH_DIR}'`,
       ...(localSandboxPrepared.effectiveConfig.sandboxSshIdentity
@@ -1127,7 +1193,7 @@ something that requires the user's attention.`;
       [
         "mkdir -p /home/node/.openclaw",
         `test -f /home/node/.openclaw/openclaw.json || echo '${ocConfigB64}' | base64 -d > /home/node/.openclaw/openclaw.json`,
-        `node -e "const fs=require('fs');const p='/home/node/.openclaw/openclaw.json';const c=JSON.parse(fs.readFileSync(p,'utf8'));if(c.gateway&&c.gateway.controlUi){c.gateway.controlUi.allowedOrigins=['http://localhost:${port}','http://127.0.0.1:${port}'];fs.writeFileSync(p,JSON.stringify(c,null,2))}"`,
+        `node -e "const fs=require('fs');const p='/home/node/.openclaw/openclaw.json';const c=JSON.parse(fs.readFileSync(p,'utf8'));c.gateway ||= {};c.gateway.http ||= {};c.gateway.http.endpoints ||= {};c.gateway.http.endpoints.chatCompletions={enabled:${effectiveConfig.openaiCompatibleEndpointsEnabled !== false}};c.gateway.http.endpoints.responses={enabled:${effectiveConfig.openaiCompatibleEndpointsEnabled !== false}};c.gateway.controlUi ||= {};c.gateway.controlUi.allowedOrigins=['http://localhost:${port}','http://127.0.0.1:${port}'];fs.writeFileSync(p,JSON.stringify(c,null,2))"`,
         `mkdir -p /home/node/.openclaw/workspace-${agentId}`,
         "mkdir -p /home/node/.openclaw/skills",
         runtimeOwnershipFixupCommand(),
@@ -1161,7 +1227,14 @@ something that requires the user's attention.`;
       log("Updating agent files from host...");
       const workspaceDir = `/home/node/.openclaw/workspace-${agentId}`;
       const copyScript = [
-        `cp /tmp/agent-source/workspace-${agentId}/* '${workspaceDir}/' 2>/dev/null || true`,
+        `for d in /tmp/agent-source/workspace-*; do`,
+        `  if [ -d "$d" ]; then`,
+        `    base="$(basename "$d")"`,
+        `    if [ "$base" = "workspace-main" ]; then dest='${workspaceDir}'; else dest="/home/node/.openclaw/$base"; fi`,
+        `    mkdir -p "$dest"`,
+        `    cp -r "$d"/* "$dest"/ 2>/dev/null || true`,
+        `  fi`,
+        `done`,
         `if [ -d /tmp/agent-source/skills ]; then mkdir -p /home/node/.openclaw/skills && cp -r /tmp/agent-source/skills/* /home/node/.openclaw/skills/ 2>/dev/null || true; fi`,
         `if [ -f /tmp/agent-source/cron/jobs.json ]; then mkdir -p /home/node/.openclaw/cron && cp /tmp/agent-source/cron/jobs.json /home/node/.openclaw/cron/jobs.json 2>/dev/null || true; fi`,
         runtimeOwnershipFixupCommand(),
@@ -1460,17 +1533,21 @@ something that requires the user's attention.`;
         lines.push(`TELEGRAM_BOT_TOKEN_REF_B64=${encodeEnvValue(JSON.stringify(config.telegramBotTokenRef))}`);
       }
 
-      if (config.anthropicApiKey && !config.anthropicApiKeyRef) {
+      if (config.anthropicApiKey && (!config.anthropicApiKeyRef || usesDefaultEnvSecretRef(config.anthropicApiKeyRef))) {
         lines.push(`ANTHROPIC_API_KEY=${config.anthropicApiKey}`);
       }
-      if (config.openaiApiKey && !config.openaiApiKeyRef) {
+      if (config.openaiApiKey && (!config.openaiApiKeyRef || usesDefaultEnvSecretRef(config.openaiApiKeyRef))) {
         lines.push(`OPENAI_API_KEY=${config.openaiApiKey}`);
       }
       if (config.agentModel) {
         lines.push(`AGENT_MODEL=${config.agentModel}`);
       }
+      lines.push(`OPENAI_COMPATIBLE_ENDPOINTS_ENABLED=${config.openaiCompatibleEndpointsEnabled !== false}`);
       if (config.modelEndpoint) {
         lines.push(`MODEL_ENDPOINT=${config.modelEndpoint}`);
+      }
+      if (config.modelEndpointApiKey) {
+        lines.push(`MODEL_ENDPOINT_API_KEY=${config.modelEndpointApiKey}`);
       }
       if (config.vertexEnabled) {
         lines.push(`VERTEX_ENABLED=true`);
@@ -1508,7 +1585,7 @@ something that requires the user's attention.`;
           lines.push(`OTEL_IMAGE=${config.otelImage}`);
         }
       }
-      if (config.telegramBotToken && !config.telegramBotTokenRef) {
+      if (config.telegramBotToken && (!config.telegramBotTokenRef || usesDefaultEnvSecretRef(config.telegramBotTokenRef))) {
         lines.push(`TELEGRAM_BOT_TOKEN=${config.telegramBotToken}`);
       }
       if (config.telegramAllowFrom) {

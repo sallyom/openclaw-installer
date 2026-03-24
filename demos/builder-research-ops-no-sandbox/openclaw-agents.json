@@ -1,0 +1,29 @@
+{
+  "mainAgent": {
+    "subagents": {
+      "allowAgents": ["builder", "research", "ops"]
+    }
+  },
+  "agents": [
+    {
+      "id": "builder",
+      "name": "Builder",
+      "model": {
+        "primary": "openai/gpt-5.4",
+        "fallbacks": ["openai/gpt-5.4-mini"]
+      }
+    },
+    {
+      "id": "research",
+      "name": "Research",
+      "model": {
+        "primary": "anthropic/claude-sonnet-4-6",
+        "fallbacks": ["openai/gpt-5.4"]
+      }
+    },
+    {
+      "id": "ops",
+      "name": "Ops"
+    }
+  ]
+}
