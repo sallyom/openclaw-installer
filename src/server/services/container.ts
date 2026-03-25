@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createServer } from "node:net";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -134,6 +135,52 @@ function isOpenClawRuntimeImage(image: string): boolean {
   const repoName = lastSegment.split(":")[0];
 
   return repoName === "openclaw";
+}
+
+/**
+ * Check whether a host port is available for binding.
+ * If the port is already in use, tries to identify the container using it
+ * and throws an error with a helpful message.
+ */
+export async function checkPortAvailable(
+  port: number,
+  runtime: ContainerRuntime,
+): Promise<void> {
+  const portFree = await new Promise<boolean>((resolve) => {
+    const server = createServer();
+    server.once("error", () => resolve(false));
+    server.listen(port, "0.0.0.0", () => {
+      server.close(() => resolve(true));
+    });
+  });
+
+  if (portFree) return;
+
+  // Port is in use — try to find which container is using it
+  let occupant = "";
+  try {
+    const { stdout } = await execFileAsync(runtime, [
+      "ps",
+      "--format",
+      "{{.Names}}\t{{.Ports}}",
+    ]);
+    for (const line of stdout.trim().split("\n")) {
+      if (!line.trim()) continue;
+      if (line.includes(`:${port}->`)) {
+        const name = line.split("\t")[0];
+        if (name) {
+          occupant = ` by container ${name.trim()}`;
+          break;
+        }
+      }
+    }
+  } catch {
+    // Container runtime query failed — still report the port conflict
+  }
+
+  throw new Error(
+    `Port ${port} is already in use${occupant}. Stop the existing instance first or choose a different port.`,
+  );
 }
 
 /**

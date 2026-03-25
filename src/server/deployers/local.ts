@@ -17,6 +17,7 @@ import {
   detectRuntime,
   removeContainer,
   removeVolume,
+  checkPortAvailable,
   OPENCLAW_LABELS,
   type ContainerRuntime,
 } from "../services/container.js";
@@ -736,6 +737,9 @@ export class LocalDeployer implements Deployer {
     }
     log(`Using container runtime: ${runtime}`);
 
+    // Check for port conflicts before attempting to create containers (Fix for #12)
+    await checkPortAvailable(port, runtime);
+
     // Remove existing container with same name (in case --rm didn't fire)
     await removeContainer(runtime, name);
 
@@ -1282,6 +1286,9 @@ something that requires the user's attention.`;
     if (sshMaterialResult.code !== 0) {
       throw new Error("Failed to stage SSH sandbox material into local runtime state");
     }
+
+    // Check for port conflicts before attempting to create containers (Fix for #12)
+    await checkPortAvailable(port, runtime);
 
     // Remove old container if it exists (stop may not have fully cleaned up)
     await removeContainer(runtime, name);
