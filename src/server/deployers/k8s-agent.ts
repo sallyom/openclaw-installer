@@ -113,6 +113,11 @@ Check the skills directory for installed skills:
 
 Each skill has a SKILL.md with usage instructions. Use skills when
 they match the user's request.
+
+## A2A Notes
+- If the A2A skill is installed, check \`MEMORY.md\` before contacting peers
+- Keep the \`Known A2A Peers\` table current when you verify useful peers
+- Prefer verified peer URLs over guessing namespaces from memory
 `;
 }
 
@@ -156,6 +161,12 @@ and operational patterns.
 
 ## Operational Lessons
 *(populated through experience)*
+
+## Known A2A Peers
+Use this table to track verified peer OpenClaw instances.
+
+| Namespace | URL | Capabilities | Last Verified | Notes |
+| --- | --- | --- | --- | --- |
 `;
 }
 

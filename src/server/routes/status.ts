@@ -1,10 +1,8 @@
 import { Router } from "express";
 import { readFile } from "node:fs/promises";
-import { execFile } from "node:child_process";
 import { installerLocalInstanceDir } from "../paths.js";
 import { installerDataDir } from "../paths.js";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import {
   discoverContainers,
   discoverVolumes,

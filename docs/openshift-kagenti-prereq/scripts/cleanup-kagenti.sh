@@ -1,0 +1,261 @@
+#!/usr/bin/env bash
+# ============================================================================
+# KAGENTI PLATFORM CLEANUP
+# ============================================================================
+# Removes the Kagenti platform: all 3 Helm charts, stuck namespaces,
+# cert-manager namespace, and shared trust ClusterIssuer CRs.
+#
+# Uses parallel deletion where possible for faster cleanup.
+#
+# Usage:
+#   ./scripts/cleanup-kagenti.sh            # Interactive (prompts for confirmation)
+#   ./scripts/cleanup-kagenti.sh --yes      # Skip confirmation prompt
+#
+# This script:
+#   1. Uninstalls Helm releases (parallel): kagenti, mcp-gateway, kagenti-deps
+#   2. Deletes namespaces (parallel, waits for clean deletion)
+#   3. Force-deletes operator namespaces (openshift-builds, ZTWIM, mcp-system)
+#   4. Deletes shared trust ClusterIssuers and Certificates
+#   5. Removes cert-manager OLM operator + namespace (must be last)
+# ============================================================================
+
+set -euo pipefail
+
+KUBECTL="oc"
+AUTO_YES=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --yes|-y) AUTO_YES=true; shift ;;
+    -h|--help)
+      echo "Usage: $0 [OPTIONS]"
+      echo ""
+      echo "Options:"
+      echo "  --yes, -y    Skip confirmation prompt"
+      echo "  -h, --help   Show this help"
+      exit 0
+      ;;
+    *) echo "Unknown option: $1"; exit 1 ;;
+  esac
+done
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+log_info()    { echo -e "${BLUE}→${NC} $1"; }
+log_success() { echo -e "${GREEN}✓${NC} $1"; }
+log_warn()    { echo -e "${YELLOW}⚠${NC} $1"; }
+log_error()   { echo -e "${RED}✗${NC} $1"; }
+
+echo ""
+echo "============================================"
+echo "  Kagenti Platform Cleanup"
+echo "============================================"
+echo ""
+echo "This will remove:"
+echo "  - Helm releases: kagenti, mcp-gateway, kagenti-deps"
+echo "  - Namespaces: kagenti-system, kagenti-webhook-system, mcp-system, gateway-system, keycloak, istio-cni,"
+echo "    istio-system, istio-ztunnel, openshift-builds,"
+echo "    zero-trust-workload-identity-manager, cert-manager-operator, cert-manager"
+echo "  - ClusterIssuers: istio-mesh-root-selfsigned, istio-mesh-ca"
+echo "  - Certificates: istio-mesh-root-ca, istio-cacerts-openshift-gateway"
+echo "  - Controller resources: Deployment/ConfigMap/ServiceAccount kagenti-namespace-controller"
+echo "  - Cluster RBAC: kagenti-namespace-controller"
+echo ""
+
+if ! $AUTO_YES; then
+  read -p "Continue? (y/N): " -r
+  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    log_info "Cleanup cancelled"
+    exit 0
+  fi
+  echo ""
+fi
+
+START_SECONDS=$SECONDS
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+# Wait for namespace to be fully deleted (no finalizer stripping).
+_delete_ns() {
+  local ns="$1"
+  if ! $KUBECTL get namespace "$ns" &>/dev/null 2>&1; then
+    log_info "  $ns — not found, skipping"
+    return 0
+  fi
+  log_info "  $ns — deleting..."
+  $KUBECTL delete namespace "$ns" --timeout=120s 2>/dev/null && \
+    log_success "  $ns deleted" || \
+    log_error "  $ns deletion timed out — may need manual cleanup"
+}
+
+# Force-delete: strip finalizers if stuck after 10s.
+_force_delete_ns() {
+  local ns="$1"
+  if ! $KUBECTL get namespace "$ns" &>/dev/null 2>&1; then
+    log_info "  $ns — not found, skipping"
+    return 0
+  fi
+  if $KUBECTL delete namespace "$ns" --timeout=20s 2>/dev/null; then
+    log_success "  $ns deleted"
+    return 0
+  fi
+  log_warn "  $ns stuck — stripping finalizers..."
+  $KUBECTL get namespace "$ns" -o json 2>/dev/null | \
+    jq '.spec.finalizers = []' | \
+    $KUBECTL replace --raw "/api/v1/namespaces/$ns/finalize" -f - 2>/dev/null || true
+  sleep 3
+  if $KUBECTL get namespace "$ns" &>/dev/null 2>&1; then
+    log_error "  $ns still exists — may need manual cleanup"
+  else
+    log_success "  $ns deleted (finalizers stripped)"
+  fi
+}
+
+_uninstall_release() {
+  local release="$1" ns="$2"
+  if helm status "$release" -n "$ns" &>/dev/null 2>&1; then
+    helm uninstall "$release" -n "$ns" --no-hooks 2>/dev/null && \
+      log_success "  $release uninstalled" || \
+      log_warn "  $release uninstall returned non-zero"
+  else
+    log_info "  $release — not found, skipping"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Step 1: Uninstall Helm releases (parallel)
+# ---------------------------------------------------------------------------
+log_info "Step 1: Uninstalling Helm releases..."
+
+_uninstall_release kagenti     kagenti-system &
+_uninstall_release mcp-gateway mcp-system     &
+_uninstall_release kagenti-deps kagenti-system &
+wait
+echo ""
+
+# ---------------------------------------------------------------------------
+# Step 2: Delete namespaces (parallel, wait for clean deletion)
+# ---------------------------------------------------------------------------
+log_info "Step 2: Deleting namespaces..."
+
+_delete_ns kagenti-system &
+_delete_ns kagenti-webhook-system &
+_delete_ns keycloak       &
+_delete_ns istio-cni      &
+_delete_ns istio-system   &
+_delete_ns istio-ztunnel  &
+wait
+echo ""
+
+# ---------------------------------------------------------------------------
+# Step 3: Force-delete operator namespaces (commonly stuck on finalizers)
+# ---------------------------------------------------------------------------
+log_info "Step 3: Cleaning up operator namespaces..."
+
+_force_delete_ns openshift-builds &
+PID_OB=$!
+
+$KUBECTL delete configmaps --all -n zero-trust-workload-identity-manager --timeout=10s 2>/dev/null || true
+_force_delete_ns zero-trust-workload-identity-manager &
+PID_ZT=$!
+
+_force_delete_ns mcp-system &
+PID_MS=$!
+
+_force_delete_ns gateway-system &
+PID_GS=$!
+
+wait $PID_OB $PID_ZT $PID_MS $PID_GS
+echo ""
+
+# ---------------------------------------------------------------------------
+# Step 4: Delete shared trust ClusterIssuers + Certificates
+# ---------------------------------------------------------------------------
+log_info "Step 4: Deleting shared trust resources..."
+
+for ci in istio-mesh-root-selfsigned istio-mesh-ca; do
+  if $KUBECTL get clusterissuer "$ci" &>/dev/null 2>&1; then
+    $KUBECTL delete clusterissuer "$ci" 2>/dev/null && \
+      log_success "  ClusterIssuer $ci deleted" || \
+      log_warn "  Failed to delete ClusterIssuer $ci"
+  else
+    log_info "  ClusterIssuer $ci — not found, skipping"
+  fi
+done
+
+for cert_ns in "istio-mesh-root-ca:cert-manager" "istio-cacerts-openshift-gateway:openshift-ingress"; do
+  cert="${cert_ns%%:*}"
+  ns="${cert_ns##*:}"
+  if $KUBECTL get certificate "$cert" -n "$ns" &>/dev/null 2>&1; then
+    $KUBECTL delete certificate "$cert" -n "$ns" 2>/dev/null && \
+      log_success "  Certificate $ns/$cert deleted" || \
+      log_warn "  Failed to delete Certificate $ns/$cert"
+  else
+    log_info "  Certificate $ns/$cert — not found, skipping"
+  fi
+done
+echo ""
+
+# ---------------------------------------------------------------------------
+# Step 5: Remove namespace controller
+# ---------------------------------------------------------------------------
+log_info "Step 5: Removing Kagenti namespace controller..."
+
+for resource in \
+  "deployment/kagenti-namespace-controller" \
+  "configmap/kagenti-namespace-controller" \
+  "serviceaccount/kagenti-namespace-controller"
+do
+  $KUBECTL delete "$resource" -n kagenti-system --ignore-not-found >/dev/null 2>&1 && \
+    log_success "  ${resource} deleted" || \
+    log_warn "  Failed to delete ${resource}"
+done
+
+for resource in \
+  "clusterrolebinding/kagenti-namespace-controller" \
+  "clusterrole/kagenti-namespace-controller"
+do
+  $KUBECTL delete "$resource" --ignore-not-found >/dev/null 2>&1 && \
+    log_success "  ${resource} deleted" || \
+    log_warn "  Failed to delete ${resource}"
+done
+echo ""
+
+# ---------------------------------------------------------------------------
+# Step 6: Remove cert-manager OLM operator + namespaces (must be last)
+# ---------------------------------------------------------------------------
+log_info "Step 6: Removing cert-manager operator..."
+
+$KUBECTL delete subscription --all -n cert-manager-operator --timeout=30s 2>/dev/null && \
+  log_success "  cert-manager Subscription deleted" || \
+  log_info "  No Subscription found in cert-manager-operator"
+
+CSV=$($KUBECTL get csv -n cert-manager-operator -o name 2>/dev/null | head -1)
+if [ -n "$CSV" ]; then
+  $KUBECTL delete "$CSV" -n cert-manager-operator --timeout=30s 2>/dev/null && \
+    log_success "  cert-manager CSV deleted" || \
+    log_warn "  Failed to delete cert-manager CSV"
+fi
+
+_delete_ns cert-manager-operator &
+_delete_ns cert-manager          &
+wait
+echo ""
+
+ELAPSED=$(( SECONDS - START_SECONDS ))
+MINS=$(( ELAPSED / 60 ))
+SECS=$(( ELAPSED % 60 ))
+
+echo "============================================"
+echo "  Kagenti Cleanup Complete  (${MINS}m ${SECS}s)"
+echo "============================================"
+echo ""
+echo "To redeploy, run: ./scripts/setup-kagenti.sh"
+echo ""

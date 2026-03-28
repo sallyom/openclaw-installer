@@ -9,6 +9,8 @@ const distServerDir = join(distDir, "server");
 const distCompatServerDir = join(distDir, "src", "server");
 const providerPluginsDir = join(repoRoot, "provider-plugins");
 const distProviderPluginsDir = join(distDir, "provider-plugins");
+const deployerAssetsDir = join(repoRoot, "src", "server", "deployers", "assets");
+const distDeployerAssetsDir = join(distServerDir, "deployers", "assets");
 
 function resetDir(target) {
   rmSync(target, { recursive: true, force: true });
@@ -20,6 +22,8 @@ function copyDirIfPresent(source, target) {
   rmSync(target, { recursive: true, force: true });
   cpSync(source, target, { recursive: true });
 }
+
+copyDirIfPresent(deployerAssetsDir, distDeployerAssetsDir);
 
 if (existsSync(distServerDir)) {
   resetDir(distCompatServerDir);

@@ -76,6 +76,47 @@ describe("model config generation", () => {
     });
   });
 
+  it("publishes default provider entries for additional configured credentials", () => {
+    const config = makeConfig({
+      inferenceProvider: "custom-endpoint",
+      anthropicApiKey: "anthropic-key",
+      openaiApiKey: "openai-key",
+      modelEndpoint: "https://example.com/v1",
+      modelEndpointModel: "mistral-small-24b-w8a8",
+      modelEndpointModelLabel: "Mistral Small 24B",
+    });
+
+    const rendered = buildOpenClawConfig(config, "gateway-token") as {
+      agents?: {
+        defaults?: {
+          models?: Record<string, { alias?: string }>;
+        };
+      };
+    };
+
+    expect(rendered.agents?.defaults?.models).toMatchObject({
+      "anthropic/claude-sonnet-4-6": { alias: "claude-sonnet-4-6" },
+      "openai/gpt-5.4": { alias: "gpt-5.4" },
+      "endpoint/mistral-small-24b-w8a8": { alias: "Mistral Small 24B" },
+    });
+  });
+
+  it("emits an empty endpoint provider model list when no endpoint model is set yet", () => {
+    const config = makeConfig({
+      inferenceProvider: "custom-endpoint",
+      modelEndpoint: "https://example.com/v1",
+      modelEndpointApiKey: "endpoint-key",
+    });
+
+    const rendered = buildOpenClawConfig(config, "gateway-token") as {
+      models?: {
+        providers?: Record<string, { models?: Array<{ id?: string; name?: string }> }>;
+      };
+    };
+
+    expect(rendered.models?.providers?.endpoint?.models).toEqual([]);
+  });
+
   it("can disable OpenAI-compatible gateway endpoints in generated config", () => {
     const config = makeConfig({
       openaiCompatibleEndpointsEnabled: false,

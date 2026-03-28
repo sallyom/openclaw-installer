@@ -331,6 +331,9 @@ function attachSecretHandlingConfig(ocConfig: Record<string, unknown>, config: D
       ...((providersMap[CUSTOM_ENDPOINT_PROVIDER] as Record<string, unknown> | undefined) || {}),
       baseUrl: config.modelEndpoint.trim(),
       api: "openai-completions",
+      models: Array.isArray((providersMap[CUSTOM_ENDPOINT_PROVIDER] as Record<string, unknown> | undefined)?.models)
+        ? (providersMap[CUSTOM_ENDPOINT_PROVIDER] as Record<string, unknown>).models
+        : [],
     };
     if (providerApiKeyRef) {
       endpointProvider.apiKey = cloneSecretRef(providerApiKeyRef);
@@ -709,7 +712,6 @@ function buildRunArgs(
 ): string[] {
   const { effectiveConfig } = prepareLocalSandboxSshConfig(config);
   const image = resolveImage(effectiveConfig);
-  const isContainerized = existsSync("/.dockerenv") || existsSync("/run/.containerenv");
   const useProxy = shouldUseLitellmProxy(effectiveConfig) && !!litellmMasterKey;
   const useOtelSidecar = shouldUseOtel(effectiveConfig) && !!otelEnvVars;
   const hasSidecars = useProxy || useOtelSidecar;
@@ -851,8 +853,7 @@ export class LocalDeployer implements Deployer {
     // Remove existing container with same name (in case --rm didn't fire)
     await removeContainer(runtime, name);
 
-    const isContainerized = existsSync("/.dockerenv") || existsSync("/run/.containerenv");
-    const image = resolveImage(config);
+      const image = resolveImage(config);
 
     // Pull the image if it doesn't exist locally.
     // For mutable tags (:latest/untagged), --pull=newer on `podman run` handles
@@ -932,7 +933,12 @@ These files are memory. If you change this file, tell the user.`;
 Check the skills directory for installed skills:
 \\\`ls ~/.openclaw/skills/\\\`
 
-Each skill has a SKILL.md with usage instructions.`;
+Each skill has a SKILL.md with usage instructions.
+
+## A2A Notes
+- If the A2A skill is installed, check \`MEMORY.md\` before contacting peers
+- Keep the \`Known A2A Peers\` table current when you verify useful peers
+- Prefer verified peer URLs over guessing namespaces from memory`;
 
     const userMd = `# USER.md - Instance Owner
 
@@ -957,7 +963,13 @@ something that requires the user's attention.`;
 *(populated through conversation)*
 
 ## Operational Lessons
-*(populated through experience)*`;
+*(populated through experience)*
+
+## Known A2A Peers
+Use this table to track verified peer OpenClaw instances.
+
+| Namespace | URL | Capabilities | Last Verified | Notes |
+| --- | --- | --- | --- | --- |`;
 
     const initScript = [
       // Write openclaw.json only if missing (don't overwrite live config)
@@ -1005,6 +1017,8 @@ something that requires the user's attention.`;
       `if [ -f /tmp/agent-source/cron/jobs.json ]; then mkdir -p /home/node/.openclaw/cron && cp /tmp/agent-source/cron/jobs.json /home/node/.openclaw/cron/jobs.json 2>/dev/null || true; fi`,
       runtimeOwnershipFixupCommand(),
     ].join("\n");
+
+    const isContainerized = existsSync("/.dockerenv") || existsSync("/run/.containerenv");
 
     const initArgs = [
       "run", "--rm",
@@ -1287,10 +1301,10 @@ something that requires the user's attention.`;
     const port = effectiveConfig.port ?? DEFAULT_PORT;
     const image = resolveImage(effectiveConfig);
     const vol = result.volumeName ?? volumeName(effectiveConfig);
+    const isContainerized = existsSync("/.dockerenv") || existsSync("/run/.containerenv");
 
     // Copy updated agent files from host into volume before starting
-    const isContainerized = existsSync("/.dockerenv") || existsSync("/run/.containerenv");
-    const agentId = `${effectiveConfig.prefix || "openclaw"}_${effectiveConfig.agentName}`;
+      const agentId = `${effectiveConfig.prefix || "openclaw"}_${effectiveConfig.agentName}`;
     const agentSourceDir = normalizeHostPath(effectiveConfig.agentSourceDir) || defaultAgentSourceDir(isContainerized);
 
     const bootstrapGatewayToken = await this.readSavedToken(name) || generateToken();
@@ -1791,7 +1805,6 @@ something that requires the user's attention.`;
     const image = resolveImage(result.config);
     const agentId = `${result.config.prefix || "openclaw"}_${result.config.agentName}`;
     const workspaceDir = `/home/node/.openclaw/workspace-${agentId}`;
-
     const isContainerized = existsSync("/.dockerenv") || existsSync("/run/.containerenv");
     const agentSourceDir = normalizeHostPath(result.config.agentSourceDir) || defaultAgentSourceDir(isContainerized);
 

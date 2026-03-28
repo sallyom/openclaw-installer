@@ -104,12 +104,18 @@ export function buildConfiguredAgentModelCatalog(
   const catalog = buildDefaultAgentModelCatalog(primaryModelRef);
   const configuredModels = [
     {
-      ref: normalizeProviderModelRef("anthropic", config.anthropicModel),
-      alias: config.anthropicModel?.trim() || undefined,
+      ref: normalizeProviderModelRef(
+        "anthropic",
+        config.anthropicModel || ((config.anthropicApiKey || config.anthropicApiKeyRef) ? "claude-sonnet-4-6" : undefined),
+      ),
+      alias: config.anthropicModel?.trim() || "claude-sonnet-4-6",
     },
     {
-      ref: normalizeProviderModelRef("openai", config.openaiModel),
-      alias: config.openaiModel?.trim() || undefined,
+      ref: normalizeProviderModelRef(
+        "openai",
+        config.openaiModel || ((config.openaiApiKey || config.openaiApiKeyRef) ? "gpt-5.4" : undefined),
+      ),
+      alias: config.openaiModel?.trim() || "gpt-5.4",
     },
     {
       ref: normalizeProviderModelRef(CUSTOM_ENDPOINT_PROVIDER, config.modelEndpointModel),
@@ -250,6 +256,9 @@ function attachSecretHandlingConfig(ocConfig: Record<string, unknown>, config: D
       ...((providersMap[CUSTOM_ENDPOINT_PROVIDER] as Record<string, unknown> | undefined) || {}),
       baseUrl: config.modelEndpoint.trim(),
       api: "openai-completions",
+      models: Array.isArray((providersMap[CUSTOM_ENDPOINT_PROVIDER] as Record<string, unknown> | undefined)?.models)
+        ? (providersMap[CUSTOM_ENDPOINT_PROVIDER] as Record<string, unknown>).models
+        : [],
     };
     if (providerApiKeyRef) {
       endpointProvider.apiKey = cloneSecretRef(providerApiKeyRef);

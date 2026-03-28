@@ -50,8 +50,6 @@ describe("loadPlugins", () => {
   });
 
   it("discovers and loads a valid provider plugin with register()", async () => {
-    const registerSpy = vi.fn();
-
     // existsSync: true for provider-plugins dir, true for src/index.ts entry point, false for plugins.json
     mockedExistsSync.mockImplementation((p: unknown) => {
       const path = String(p);
@@ -87,8 +85,6 @@ describe("loadPlugins", () => {
 
     // We need to mock the actual dynamic import that happens inside loader.ts.
     // Since loader.ts uses `import(pathToFileURL(entryPoint).href)`, we mock at module level.
-    const originalImport = globalThis[Symbol.for("vitest:dynamicImport") as any];
-
     // Instead of trying to intercept dynamic import, let's use a different approach:
     // We'll test that loadPlugins calls register() by providing a real module path.
     // Since mocking dynamic import is tricky, let's verify the discovery logic

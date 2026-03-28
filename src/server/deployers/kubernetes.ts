@@ -42,7 +42,6 @@ import {
   builtInA2aSkillEntries,
   envoyConfigMapManifest,
   environmentsConfigMapManifest,
-  privilegedSccRoleBindingManifest,
   spiffeHelperConfigMapManifest,
 } from "./k8s-a2a.js";
 import { shouldUseLitellmProxy, generateLitellmMasterKey, generateLitellmConfig } from "./litellm.js";
@@ -145,80 +144,61 @@ export class KubernetesDeployer implements Deployer {
       log(`Namespace ${ns} labeled for Kagenti`);
     }
 
-    if (config.withA2a && config.mode !== "openshift") {
-      const sa = a2aServiceAccountManifest(ns);
-      await applyResource(
-        () => core.readNamespacedServiceAccount({ name: "openclaw-oauth-proxy", namespace: ns }),
-        () => core.createNamespacedServiceAccount({ namespace: ns, body: sa }),
-        () => core.replaceNamespacedServiceAccount({ name: "openclaw-oauth-proxy", namespace: ns, body: sa }),
-        "ServiceAccount openclaw-oauth-proxy",
-        log,
-      );
-    }
-
-    if (config.withA2a && config.mode === "openshift") {
-      const rb = privilegedSccRoleBindingManifest(ns);
-      await applyResource(
-        () => loadKubeConfig().makeApiClient(k8s.RbacAuthorizationV1Api)
-          .readNamespacedRoleBinding({ name: rb.metadata!.name!, namespace: ns }),
-        () => loadKubeConfig().makeApiClient(k8s.RbacAuthorizationV1Api)
-          .createNamespacedRoleBinding({ namespace: ns, body: rb }),
-        () => loadKubeConfig().makeApiClient(k8s.RbacAuthorizationV1Api)
-          .replaceNamespacedRoleBinding({ name: rb.metadata!.name!, namespace: ns, body: rb }),
-        "RoleBinding openclaw-oauth-proxy-privileged-scc",
-        log,
-      );
+    if (config.withA2a) {
+      if (config.mode === "openshift") {
+        log("OpenShift A2A: leaving ServiceAccount openclaw-oauth-proxy to the OpenShift plugin so OAuth redirect annotations are preserved");
+      } else {
+        const sa = a2aServiceAccountManifest(ns);
+        await applyResource(
+          () => core.readNamespacedServiceAccount({ name: "openclaw-oauth-proxy", namespace: ns }),
+          () => core.createNamespacedServiceAccount({ namespace: ns, body: sa }),
+          () => core.replaceNamespacedServiceAccount({ name: "openclaw-oauth-proxy", namespace: ns, body: sa }),
+          "ServiceAccount openclaw-oauth-proxy",
+          log,
+        );
+      }
     }
 
     if (config.withA2a) {
-      const realm = a2aRealm(config);
-      const kcNs = a2aKeycloakNamespace(config);
-      const internalKeycloakUrl = `http://keycloak-service.${kcNs}.svc.cluster.local:8080`;
-      let issuerBaseUrl = internalKeycloakUrl;
-      let adminUsername = "admin";
-      let adminPassword = "admin";
-
-      try {
-        const secret = await core.readNamespacedSecret({ name: "keycloak-initial-admin", namespace: kcNs });
-        const data = secret.data || {};
-        if (data.username) adminUsername = Buffer.from(data.username, "base64").toString("utf8");
-        if (data.password) adminPassword = Buffer.from(data.password, "base64").toString("utf8");
-      } catch {
-        log("Keycloak admin secret not found; falling back to default admin credentials in A2A config");
-      }
+      const a2aConfigMaps: Array<{ name: string; body: k8s.V1ConfigMap }> = [];
 
       if (config.mode === "openshift") {
+        log("OpenShift A2A assumes setup-kagenti.sh is already installed; relying on the Kagenti namespace controller for SCC and Kagenti namespace ConfigMaps");
+      } else {
+        const realm = a2aRealm(config);
+        const kcNs = a2aKeycloakNamespace(config);
+        const internalKeycloakUrl = `http://keycloak-service.${kcNs}.svc.cluster.local:8080`;
+        const issuerBaseUrl = internalKeycloakUrl;
+        let adminUsername = "admin";
+        let adminPassword = "admin";
+
         try {
-          const routesApi = loadKubeConfig().makeApiClient(k8s.CustomObjectsApi);
-          const route = await routesApi.getNamespacedCustomObject({
-            group: "route.openshift.io",
-            version: "v1",
-            namespace: kcNs,
-            plural: "routes",
-            name: "keycloak",
-          }) as { spec?: { host?: string } };
-          if (route.spec?.host) {
-            issuerBaseUrl = `https://${route.spec.host}`;
-          }
+          const secret = await core.readNamespacedSecret({ name: "keycloak-initial-admin", namespace: kcNs });
+          const data = secret.data || {};
+          if (data.username) adminUsername = Buffer.from(data.username, "base64").toString("utf8");
+          if (data.password) adminPassword = Buffer.from(data.password, "base64").toString("utf8");
         } catch {
-          log("Keycloak Route not found; using in-cluster issuer URL for A2A config");
+          log("Keycloak admin secret not found; falling back to default admin credentials in A2A config");
         }
+
+        a2aConfigMaps.push(
+          {
+            name: "ConfigMap environments",
+            body: environmentsConfigMapManifest(ns, realm, kcNs, adminUsername, adminPassword),
+          },
+          {
+            name: "ConfigMap authbridge-config",
+            body: authbridgeConfigMapManifest(ns, realm, issuerBaseUrl, kcNs),
+          },
+          { name: "ConfigMap envoy-config", body: envoyConfigMapManifest(ns) },
+          { name: "ConfigMap spiffe-helper-config", body: spiffeHelperConfigMapManifest(ns) },
+        );
       }
 
-      const a2aConfigMaps: Array<{ name: string; body: k8s.V1ConfigMap }> = [
-        {
-          name: "ConfigMap environments",
-          body: environmentsConfigMapManifest(ns, realm, kcNs, adminUsername, adminPassword),
-        },
-        {
-          name: "ConfigMap authbridge-config",
-          body: authbridgeConfigMapManifest(ns, realm, issuerBaseUrl, kcNs),
-        },
-        { name: "ConfigMap envoy-config", body: envoyConfigMapManifest(ns) },
-        { name: "ConfigMap spiffe-helper-config", body: spiffeHelperConfigMapManifest(ns) },
+      a2aConfigMaps.push(
         { name: "ConfigMap openclaw-agent-card", body: agentCardDataConfigMapManifest(ns) },
         { name: "ConfigMap a2a-bridge", body: a2aBridgeConfigMapManifest(ns) },
-      ];
+      );
 
       for (const { name, body } of a2aConfigMaps) {
         await applyResource(
@@ -696,7 +676,6 @@ echo "Config initialized"
       { name: "ConfigMap a2a-bridge", fn: () => core.deleteNamespacedConfigMap({ name: "a2a-bridge", namespace: ns }) },
       { name: "ConfigMap litellm-config", fn: () => core.deleteNamespacedConfigMap({ name: "litellm-config", namespace: ns }) },
       { name: "ConfigMap otel-collector-config", fn: () => core.deleteNamespacedConfigMap({ name: "otel-collector-config", namespace: ns }) },
-      { name: "RoleBinding openclaw-oauth-proxy-privileged-scc", fn: () => loadKubeConfig().makeApiClient(k8s.RbacAuthorizationV1Api).deleteNamespacedRoleBinding({ name: "openclaw-oauth-proxy-privileged-scc", namespace: ns }) },
       { name: "AgentCard openclaw-agent-card", fn: async () => {
         const customApi = loadKubeConfig().makeApiClient(k8s.CustomObjectsApi);
         await customApi.deleteNamespacedCustomObject({

@@ -230,7 +230,7 @@ describe("DeployForm agent name validation (issue #7)", () => {
   });
 
   it("submits Anthropic and OpenAI credentials together while keeping one primary provider", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === "/api/health") {
         return {
@@ -321,7 +321,7 @@ describe("DeployForm agent name validation (issue #7)", () => {
   });
 
   it("submits the OpenAI-compatible endpoints toggle when disabled", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === "/api/health") {
         return {
@@ -443,7 +443,7 @@ describe("DeployForm agent name validation (issue #7)", () => {
   });
 
   it("fetches models from the OpenAI-compatible endpoint and selects the returned label", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === "/api/health") {
         return {
