@@ -37,8 +37,10 @@ import { agentWorkspaceDir, installerLocalInstanceDir, openclawHomeDir } from ".
 import {
   buildConfiguredAgentModelCatalog,
   CUSTOM_ENDPOINT_PROVIDER,
+  detectUnavailableProvider,
   generateToken,
   normalizeModelRef,
+  resolveSubagentModel,
   usesDefaultEnvSecretRef,
 } from "./k8s-helpers.js";
 import { buildSandboxConfig } from "./sandbox.js";
@@ -481,12 +483,13 @@ function buildOpenClawConfig(config: DeployConfig, gatewayToken: string): string
           subagents: sourceBundle?.mainAgent?.subagents || subagentConfig(config.subagentPolicy),
           ...(sourceBundle?.mainAgent?.tools ? { tools: sourceBundle.mainAgent.tools } : {}),
         },
+        // Fix for #67: append deploy-time model as fallback for bundle subagents
         ...((sourceBundle?.agents || []).map((entry) => ({
           id: entry.id,
           name: entry.name || entry.id,
           ...(entry.name ? { identity: { name: entry.name } } : {}),
           workspace: `~/.openclaw/workspace-${entry.id}`,
-          model: entry.model || { primary: model },
+          model: resolveSubagentModel(entry.model, model),
           ...(entry.subagents ? { subagents: entry.subagents } : {}),
           ...(entry.tools ? { tools: entry.tools } : {}),
         }))),
@@ -885,6 +888,17 @@ export class LocalDeployer implements Deployer {
     const gatewayToken = generateToken();
     const localSandboxPrepared = prepareLocalSandboxSshConfig(config);
     const ocConfig = buildOpenClawConfig(localSandboxPrepared.effectiveConfig, gatewayToken);
+
+    // Fix for #67: warn when bundle subagent models reference unavailable providers
+    if (sourceBundle?.agents) {
+      const deployModel = deriveModel(localSandboxPrepared.effectiveConfig);
+      for (const entry of sourceBundle.agents) {
+        if (entry.model?.primary && detectUnavailableProvider(entry.model.primary, localSandboxPrepared.effectiveConfig)) {
+          log(`WARNING: Subagent "${entry.id}" prefers model "${entry.model.primary}" but that provider does not appear to be configured. The deploy-time model "${deployModel}" has been added as a fallback.`);
+        }
+      }
+    }
+
     const agentsMd = buildDefaultAgentsMd(config);
     const agentJson = buildAgentJson(config);
 

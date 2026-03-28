@@ -183,6 +183,61 @@ export function deriveModel(config: DeployConfig): string {
   return "anthropic/claude-sonnet-4-6";
 }
 
+/**
+ * Resolve the model config for a bundle subagent.  The bundle's declared model
+ * takes precedence, but the deploy-time model is appended as a fallback so
+ * there is always a working option even when the bundle's preferred provider
+ * isn't configured.  (Fix for #67)
+ */
+export function resolveSubagentModel(
+  entryModel: { primary?: string; fallbacks?: string[] } | undefined,
+  deployModel: string,
+): { primary: string; fallbacks?: string[] } {
+  if (!entryModel?.primary) {
+    return { primary: deployModel };
+  }
+
+  const fallbacks = [...(entryModel.fallbacks || [])];
+
+  if (entryModel.primary !== deployModel && !fallbacks.includes(deployModel)) {
+    fallbacks.push(deployModel);
+  }
+
+  return fallbacks.length > 0
+    ? { primary: entryModel.primary, fallbacks }
+    : { primary: entryModel.primary };
+}
+
+/**
+ * Check whether a model ref's provider appears to be unavailable given the
+ * current deploy config.  Returns true when the provider likely won't work,
+ * used to emit deploy-time warnings.  (Fix for #67)
+ */
+export function detectUnavailableProvider(
+  modelRef: string,
+  config: DeployConfig,
+): boolean {
+  const provider = modelRef.split("/")[0];
+  if (!provider) return false;
+
+  switch (provider) {
+    case "anthropic":
+      return !config.anthropicApiKey && !config.anthropicApiKeyRef
+        && config.inferenceProvider !== "anthropic";
+    case "openai":
+      return !config.openaiApiKey && !config.openaiApiKeyRef
+        && config.inferenceProvider !== "openai";
+    case "anthropic-vertex":
+      return !config.vertexEnabled
+        || (config.vertexProvider !== "anthropic" && config.inferenceProvider !== "vertex-anthropic");
+    case "google-vertex":
+      return !config.vertexEnabled
+        || (config.vertexProvider !== "google" && config.inferenceProvider !== "vertex-google");
+    default:
+      return false;
+  }
+}
+
 function subagentConfig(policy?: string): { allowAgents: string[] } {
   switch (policy) {
     case "self": return { allowAgents: ["self"] };
@@ -374,12 +429,13 @@ export function buildOpenClawConfig(config: DeployConfig, gatewayToken: string):
           subagents: sourceBundle?.mainAgent?.subagents || subagentConfig(config.subagentPolicy),
           ...(sourceBundle?.mainAgent?.tools ? { tools: sourceBundle.mainAgent.tools } : {}),
         },
+        // Fix for #67: append deploy-time model as fallback for bundle subagents
         ...((sourceBundle?.agents || []).map((entry) => ({
           id: entry.id,
           name: entry.name || entry.id,
           ...(entry.name ? { identity: { name: entry.name } } : {}),
           workspace: `~/.openclaw/workspace-${entry.id}`,
-          model: entry.model || { primary: model },
+          model: resolveSubagentModel(entry.model, model),
           ...(entry.subagents ? { subagents: entry.subagents } : {}),
           ...(entry.tools ? { tools: entry.tools } : {}),
         }))),

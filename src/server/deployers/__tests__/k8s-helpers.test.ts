@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   buildOpenClawConfig,
   deriveModel,
+  detectUnavailableProvider,
   namespaceName,
   normalizeModelRef,
+  resolveSubagentModel,
   sanitizeForRfc1123,
   usesDefaultEnvSecretRef,
 } from "../k8s-helpers.js";
@@ -469,5 +471,102 @@ describe("namespaceName", () => {
   it("falls back to 'agent' when agent name sanitizes to empty", () => {
     const config = makeConfig({ agentName: "___", prefix: "user" });
     expect(namespaceName(config)).toBe("user-agent-openclaw");
+  });
+});
+
+// Regression tests for #67: subagent model fallback
+describe("resolveSubagentModel", () => {
+  it("uses deploy-time model when bundle entry has no model", () => {
+    expect(resolveSubagentModel(undefined, "anthropic/claude-sonnet-4-6")).toEqual({
+      primary: "anthropic/claude-sonnet-4-6",
+    });
+  });
+
+  it("uses deploy-time model when bundle entry has empty model", () => {
+    expect(resolveSubagentModel({}, "anthropic/claude-sonnet-4-6")).toEqual({
+      primary: "anthropic/claude-sonnet-4-6",
+    });
+  });
+
+  it("appends deploy-time model as fallback when bundle declares a different model", () => {
+    expect(resolveSubagentModel(
+      { primary: "openai/gpt-5.4" },
+      "anthropic/claude-sonnet-4-6",
+    )).toEqual({
+      primary: "openai/gpt-5.4",
+      fallbacks: ["anthropic/claude-sonnet-4-6"],
+    });
+  });
+
+  it("appends deploy-time model after existing bundle fallbacks", () => {
+    expect(resolveSubagentModel(
+      { primary: "openai/gpt-5.4", fallbacks: ["openai/gpt-5.4-mini"] },
+      "anthropic-vertex/claude-sonnet-4-6",
+    )).toEqual({
+      primary: "openai/gpt-5.4",
+      fallbacks: ["openai/gpt-5.4-mini", "anthropic-vertex/claude-sonnet-4-6"],
+    });
+  });
+
+  it("does not duplicate deploy-time model when it matches the primary", () => {
+    expect(resolveSubagentModel(
+      { primary: "anthropic/claude-sonnet-4-6" },
+      "anthropic/claude-sonnet-4-6",
+    )).toEqual({
+      primary: "anthropic/claude-sonnet-4-6",
+    });
+  });
+
+  it("does not duplicate deploy-time model when it is already a fallback", () => {
+    expect(resolveSubagentModel(
+      { primary: "anthropic/claude-sonnet-4-6", fallbacks: ["openai/gpt-5.4"] },
+      "openai/gpt-5.4",
+    )).toEqual({
+      primary: "anthropic/claude-sonnet-4-6",
+      fallbacks: ["openai/gpt-5.4"],
+    });
+  });
+});
+
+describe("detectUnavailableProvider", () => {
+  it("detects missing OpenAI provider", () => {
+    const config = makeConfig({ inferenceProvider: "anthropic", anthropicApiKey: "sk-ant" });
+    expect(detectUnavailableProvider("openai/gpt-5.4", config)).toBe(true);
+  });
+
+  it("detects missing Anthropic provider", () => {
+    const config = makeConfig({ inferenceProvider: "openai", openaiApiKey: "sk-oai" });
+    expect(detectUnavailableProvider("anthropic/claude-sonnet-4-6", config)).toBe(true);
+  });
+
+  it("returns false when OpenAI key is configured", () => {
+    const config = makeConfig({ openaiApiKey: "sk-oai" });
+    expect(detectUnavailableProvider("openai/gpt-5.4", config)).toBe(false);
+  });
+
+  it("returns false when Anthropic key is configured", () => {
+    const config = makeConfig({ anthropicApiKey: "sk-ant" });
+    expect(detectUnavailableProvider("anthropic/claude-sonnet-4-6", config)).toBe(false);
+  });
+
+  it("returns false when inference provider matches", () => {
+    const config = makeConfig({ inferenceProvider: "openai" });
+    expect(detectUnavailableProvider("openai/gpt-5.4", config)).toBe(false);
+  });
+
+  it("detects missing vertex-anthropic provider", () => {
+    const config = makeConfig({ inferenceProvider: "openai" });
+    expect(detectUnavailableProvider("anthropic-vertex/claude-sonnet-4-6", config)).toBe(true);
+  });
+
+  it("returns false when vertex-anthropic is configured", () => {
+    const config = makeConfig({ vertexEnabled: true, vertexProvider: "anthropic" });
+    expect(detectUnavailableProvider("anthropic-vertex/claude-sonnet-4-6", config)).toBe(false);
+  });
+
+  it("returns false for unknown provider prefixes", () => {
+    const config = makeConfig({});
+    expect(detectUnavailableProvider("litellm/my-model", config)).toBe(false);
+    expect(detectUnavailableProvider("custom/model", config)).toBe(false);
   });
 });

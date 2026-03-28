@@ -8,7 +8,7 @@ export interface AgentSourceAgentEntry {
   id: string;
   name?: string;
   workspaceDir?: string;
-  model?: { primary?: string };
+  model?: { primary?: string; fallbacks?: string[] };
   tools?: Record<string, unknown>;
   subagents?: { allowAgents?: string[] };
 }

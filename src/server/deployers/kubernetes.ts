@@ -13,7 +13,7 @@ import type {
   DeployResult,
   LogCallback,
 } from "./types.js";
-import { namespaceName, agentId, generateToken, usesDefaultEnvSecretRef } from "./k8s-helpers.js";
+import { namespaceName, agentId, deriveModel, detectUnavailableProvider, generateToken, usesDefaultEnvSecretRef } from "./k8s-helpers.js";
 import { loadWorkspaceFiles } from "./k8s-agent.js";
 import { loadAgentSourceBundle, loadAgentSourceCronJobs, loadAgentSourceWorkspaceTree, mainWorkspaceShellCondition } from "./agent-source.js";
 import {
@@ -229,6 +229,17 @@ export class KubernetesDeployer implements Deployer {
       "ConfigMap openclaw-config",
       log,
     );
+
+    // Fix for #67: warn when bundle subagent models reference unavailable providers
+    const sourceBundle = loadAgentSourceBundle(config);
+    if (sourceBundle?.agents) {
+      const deployModel = deriveModel(config);
+      for (const entry of sourceBundle.agents) {
+        if (entry.model?.primary && detectUnavailableProvider(entry.model.primary, config)) {
+          log(`WARNING: Subagent "${entry.id}" prefers model "${entry.model.primary}" but that provider does not appear to be configured. The deploy-time model "${deployModel}" has been added as a fallback.`);
+        }
+      }
+    }
 
     // 4. ConfigMap (agent workspace files)
     const agentCm = agentConfigMapManifest(ns, config, workspaceFiles);
