@@ -192,12 +192,16 @@ export class OpenShiftDeployer implements Deployer {
             // meaningfully dangerous in practice.
             parsed.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
           }
-          if (parsed.gateway) {
-            const existingTrustedProxies = Array.isArray(parsed.gateway.trustedProxies)
-              ? parsed.gateway.trustedProxies.filter((value: unknown): value is string => typeof value === "string" && value.trim().length > 0)
-              : [];
-            parsed.gateway.trustedProxies = Array.from(new Set([...existingTrustedProxies, "127.0.0.1", "::1"]));
-          }
+          // NOTE: we intentionally do NOT set gateway.trustedProxies here.
+          // Setting trustedProxies to ["127.0.0.1", "::1"] causes the gateway
+          // to treat agent subprocess connections as proxy connections (looks
+          // for X-Forwarded-For headers that aren't there), which breaks
+          // shouldAllowSilentLocalPairing and blocks subagent spawning (#69).
+          // Without trustedProxies, the gateway logs a cosmetic warning about
+          // "proxy headers from untrusted address" but the Control UI still
+          // works because dangerouslyDisableDeviceAuth bypasses device auth.
+          // See ADR 0002 for full rationale.
+
           // Bind to loopback since OAuth proxy fronts the gateway
           if (parsed.gateway) {
             parsed.gateway.bind = "loopback";
@@ -230,26 +234,6 @@ export class OpenShiftDeployer implements Deployer {
       },
       // Add oauth-proxy container at the beginning
       { op: "add", path: "/spec/template/spec/containers/0", value: oauthContainer },
-      // Auto-approve the gateway's internal device pairing after startup.
-      // trustedProxies causes resolveClientIp to return undefined for direct
-      // localhost connections (no X-Forwarded-For), which prevents silent
-      // local auto-pairing for the agent subprocess's callGateway() calls.
-      // See ADR 0002 for full rationale.
-      {
-        op: "add",
-        path: "/spec/template/spec/containers/1/lifecycle",
-        value: {
-          postStart: {
-            exec: {
-              command: [
-                "sh", "-c",
-                // Wait up to 30s for gateway to start, then approve pending pairing
-                "for i in $(seq 1 30); do node -e \"require('http').get('http://127.0.0.1:18789/',r=>process.exit(0)).on('error',()=>process.exit(1))\" 2>/dev/null && break; sleep 1; done; node dist/index.js devices approve --latest 2>/dev/null || true",
-              ],
-            },
-          },
-        },
-      },
       // Add OAuth volumes
       {
         op: "add",
