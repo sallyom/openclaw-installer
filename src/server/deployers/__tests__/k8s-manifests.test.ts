@@ -109,9 +109,10 @@ describe("symlink traversal in init script", () => {
   });
 });
 
-// Regression tests for #6: API keys must not leak to the gateway in proxy mode
+// Gateway always gets provider API keys — LiteLLM only handles Vertex,
+// secondary providers (OpenAI, Anthropic) are routed directly by the gateway.
 describe("gateway env vars in proxy mode", () => {
-  it("excludes ANTHROPIC_API_KEY and OPENAI_API_KEY when litellm proxy is active", () => {
+  it("includes ANTHROPIC_API_KEY and OPENAI_API_KEY even when litellm proxy is active", () => {
     const proxyConfig = makeConfig({
       inferenceProvider: "vertex-anthropic",
       litellmProxy: true,
@@ -123,8 +124,8 @@ describe("gateway env vars in proxy mode", () => {
     const deployment = deploymentManifest("ns", proxyConfig);
     const envNames = gatewayEnvNames(deployment);
 
-    expect(envNames).not.toContain("ANTHROPIC_API_KEY");
-    expect(envNames).not.toContain("OPENAI_API_KEY");
+    expect(envNames).toContain("ANTHROPIC_API_KEY");
+    expect(envNames).toContain("OPENAI_API_KEY");
   });
 
   it("includes ANTHROPIC_API_KEY and OPENAI_API_KEY when proxy is not active", () => {
@@ -185,52 +186,27 @@ function litellmEnvNames(deployment: k8s.V1Deployment): string[] {
   return (container?.env ?? []).map((e) => e.name);
 }
 
-// Regression tests for #78: LiteLLM sidecar must receive secondary provider API keys
-describe("litellm sidecar env vars in proxy mode (#78)", () => {
-  it("injects OPENAI_API_KEY into litellm sidecar when configured", () => {
+// LiteLLM sidecar only handles Vertex — no secondary provider keys needed
+describe("litellm sidecar env vars in proxy mode", () => {
+  it("does not inject secondary provider keys into litellm sidecar", () => {
     const config = makeConfig({
       inferenceProvider: "vertex-anthropic",
       litellmProxy: true,
       gcpServiceAccountJson: '{"project_id":"test"}',
       openaiApiKey: "sk-oai-test",
-    });
-
-    const deployment = deploymentManifest("ns", config);
-    const envNames = litellmEnvNames(deployment);
-
-    expect(envNames).toContain("OPENAI_API_KEY");
-  });
-
-  it("injects ANTHROPIC_API_KEY into litellm sidecar when configured", () => {
-    const config = makeConfig({
-      inferenceProvider: "vertex-google",
-      litellmProxy: true,
-      gcpServiceAccountJson: '{"project_id":"test"}',
-      vertexProvider: "google",
       anthropicApiKey: "sk-ant-test",
     });
 
     const deployment = deploymentManifest("ns", config);
     const envNames = litellmEnvNames(deployment);
 
-    expect(envNames).toContain("ANTHROPIC_API_KEY");
-  });
-
-  it("does not inject secondary keys when they are not configured", () => {
-    const config = makeConfig({
-      inferenceProvider: "vertex-anthropic",
-      litellmProxy: true,
-      gcpServiceAccountJson: '{"project_id":"test"}',
-    });
-
-    const deployment = deploymentManifest("ns", config);
-    const envNames = litellmEnvNames(deployment);
-
+    // LiteLLM only needs GCP creds for Vertex
+    expect(envNames).toContain("GOOGLE_APPLICATION_CREDENTIALS");
     expect(envNames).not.toContain("OPENAI_API_KEY");
     expect(envNames).not.toContain("ANTHROPIC_API_KEY");
   });
 
-  it("still excludes secondary keys from the gateway container", () => {
+  it("gateway gets secondary keys even in proxy mode", () => {
     const config = makeConfig({
       inferenceProvider: "vertex-anthropic",
       litellmProxy: true,
@@ -241,13 +217,9 @@ describe("litellm sidecar env vars in proxy mode (#78)", () => {
 
     const deployment = deploymentManifest("ns", config);
     const gwEnvNames = gatewayEnvNames(deployment);
-    const sidecarEnvNames = litellmEnvNames(deployment);
 
-    // Gateway should NOT have the keys (Fix for #6 still holds)
-    expect(gwEnvNames).not.toContain("OPENAI_API_KEY");
-    expect(gwEnvNames).not.toContain("ANTHROPIC_API_KEY");
-    // Sidecar SHOULD have the keys (Fix for #78)
-    expect(sidecarEnvNames).toContain("OPENAI_API_KEY");
-    expect(sidecarEnvNames).toContain("ANTHROPIC_API_KEY");
+    // Gateway routes to OpenAI/Anthropic directly
+    expect(gwEnvNames).toContain("OPENAI_API_KEY");
+    expect(gwEnvNames).toContain("ANTHROPIC_API_KEY");
   });
 });

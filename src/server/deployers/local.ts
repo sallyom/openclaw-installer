@@ -27,7 +27,6 @@ import {
   litellmModelName,
   generateLitellmMasterKey,
   generateLitellmConfig,
-  litellmSidecarEnvVars,
   litellmRegisteredModelNames,
   LITELLM_IMAGE,
   LITELLM_PORT,
@@ -759,18 +758,16 @@ function buildRunArgs(
     NODE_ENV: "production",
   };
 
-  // Fix for #6: in proxy mode the gateway talks to LiteLLM, not directly
-  // to Anthropic/OpenAI, so don't expose API keys to the gateway.
+  // Pass API keys to the gateway so it can route to OpenAI/Anthropic natively.
+  // LiteLLM only handles Vertex models — secondary providers go direct.
   if (
-    !useProxy
-    && effectiveConfig.anthropicApiKey
+    effectiveConfig.anthropicApiKey
     && (!effectiveConfig.anthropicApiKeyRef || usesDefaultEnvSecretRef(effectiveConfig.anthropicApiKeyRef))
   ) {
     env.ANTHROPIC_API_KEY = effectiveConfig.anthropicApiKey;
   }
   if (
-    !useProxy
-    && effectiveConfig.openaiApiKey
+    effectiveConfig.openaiApiKey
     && (!effectiveConfig.openaiApiKeyRef || usesDefaultEnvSecretRef(effectiveConfig.openaiApiKeyRef))
   ) {
     env.OPENAI_API_KEY = effectiveConfig.openaiApiKey;
@@ -1146,22 +1143,13 @@ Use this table to track verified peer OpenClaw instances.
           throw new Error("Failed to create pod for sidecars");
         }
 
-        // Fix for #78: build env args for the LiteLLM sidecar, including
-        // secondary provider API keys so it can route to all configured providers.
-        const sidecarEnvArgs: string[] = [
-          "-e", `GOOGLE_APPLICATION_CREDENTIALS=${GCP_SA_CONTAINER_PATH}`,
-        ];
-        for (const [key, val] of Object.entries(litellmSidecarEnvVars(config))) {
-          sidecarEnvArgs.push("-e", `${key}=${val}`);
-        }
-
         // Start LiteLLM in the pod
         const litellmRunResult = await runCommand(runtime, [
           "run", "-d",
           "--name", litellmName,
           "--pod", pod,
           ...localStateMountArgs(config),
-          ...sidecarEnvArgs,
+          "-e", `GOOGLE_APPLICATION_CREDENTIALS=${GCP_SA_CONTAINER_PATH}`,
           litellmImage,
           "--config", LITELLM_CONFIG_PATH, "--port", String(LITELLM_PORT),
         ], log);
@@ -1169,15 +1157,6 @@ Use this table to track verified peer OpenClaw instances.
           throw new Error("Failed to start LiteLLM sidecar");
         }
       } else {
-        // Fix for #78: build env args for the LiteLLM sidecar, including
-        // secondary provider API keys so it can route to all configured providers.
-        const sidecarEnvArgs: string[] = [
-          "-e", `GOOGLE_APPLICATION_CREDENTIALS=${GCP_SA_CONTAINER_PATH}`,
-        ];
-        for (const [key, val] of Object.entries(litellmSidecarEnvVars(config))) {
-          sidecarEnvArgs.push("-e", `${key}=${val}`);
-        }
-
         // Docker: start LiteLLM container, gateway will use --network=container:
         await removeContainer(runtime as ContainerRuntime, litellmName);
         const litellmRunResult = await runCommand(runtime, [
@@ -1186,7 +1165,7 @@ Use this table to track verified peer OpenClaw instances.
           "-p", `${port}:18789`,
           "-p", `${port + 1}:${LITELLM_PORT}`,
           ...localStateMountArgs(config),
-          ...sidecarEnvArgs,
+          "-e", `GOOGLE_APPLICATION_CREDENTIALS=${GCP_SA_CONTAINER_PATH}`,
           litellmImage,
           "--config", LITELLM_CONFIG_PATH, "--port", String(LITELLM_PORT),
         ], log);

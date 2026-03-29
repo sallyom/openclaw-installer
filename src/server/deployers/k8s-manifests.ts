@@ -240,9 +240,10 @@ export function deploymentManifest(
   const useOtelDirect = useOtel && !otelViaOperator;
 
   const optionalKeys = [
-    // Fix for #6: in proxy mode the gateway talks to LiteLLM, not directly
-    // to Anthropic/OpenAI, so don't leak API keys into the gateway env.
-    ...(!useProxy ? ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"] : []),
+    // Gateway always gets provider API keys so it can route to OpenAI/Anthropic
+    // natively. LiteLLM only handles Vertex models.
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
     "MODEL_ENDPOINT",
     "MODEL_ENDPOINT_API_KEY",
     "TELEGRAM_BOT_TOKEN",
@@ -436,9 +437,9 @@ echo "Config initialized"
                 capabilities: { drop: ["ALL"] },
               },
             },
-            // LiteLLM proxy sidecar: holds GCP creds, exposes OpenAI-compatible API
-            // Fix for #78: also inject secondary provider API keys so LiteLLM
-            // can route to all configured providers (OpenAI, direct Anthropic).
+            // LiteLLM proxy sidecar: holds GCP creds, exposes OpenAI-compatible API.
+            // Only handles Vertex models — secondary providers (OpenAI, Anthropic)
+            // are routed directly by the gateway using their native API keys.
             ...(useProxy ? [{
               name: "litellm",
               image: config.litellmImage || LITELLM_IMAGE,
@@ -447,12 +448,6 @@ echo "Config initialized"
               env: [
                 ...(config.gcpServiceAccountJson
                   ? [{ name: "GOOGLE_APPLICATION_CREDENTIALS", value: "/home/node/gcp/sa.json" }]
-                  : []),
-                ...(config.openaiApiKey || config.openaiApiKeyRef
-                  ? [{ name: "OPENAI_API_KEY", valueFrom: { secretKeyRef: { name: "openclaw-secrets", key: "OPENAI_API_KEY", optional: true } } }]
-                  : []),
-                ...(config.anthropicApiKey || config.anthropicApiKeyRef
-                  ? [{ name: "ANTHROPIC_API_KEY", valueFrom: { secretKeyRef: { name: "openclaw-secrets", key: "ANTHROPIC_API_KEY", optional: true } } }]
                   : []),
               ],
               volumeMounts: [

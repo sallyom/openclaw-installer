@@ -446,10 +446,9 @@ describe("model config generation", () => {
   });
 });
 
-// Regression tests for #78: LiteLLM model catalog should include secondary providers
-// and not duplicate the primary model
-describe("litellm model catalog in proxy mode (#78)", () => {
-  it("lists secondary OpenAI model in models.providers.litellm when openaiApiKey is set", () => {
+// LiteLLM model catalog only lists Vertex models, not secondary providers
+describe("litellm model catalog in proxy mode", () => {
+  it("does not list secondary OpenAI model in litellm provider", () => {
     const config = makeConfig({
       inferenceProvider: "vertex-anthropic",
       litellmProxy: true,
@@ -463,7 +462,8 @@ describe("litellm model catalog in proxy mode (#78)", () => {
 
     const litellmModels = rendered.models?.providers?.litellm?.models ?? [];
     const modelIds = litellmModels.map((m) => m.id);
-    expect(modelIds).toContain("gpt-5.4");
+    // OpenAI models go direct via gateway, not through LiteLLM
+    expect(modelIds).not.toContain("gpt-5.4");
   });
 
   it("does not duplicate the primary model in models.providers.litellm", () => {
