@@ -109,7 +109,13 @@ export interface DeployFormConfig {
   openaiApiKey: string;
   anthropicModel: string;
   openaiModel: string;
+  anthropicModels: string[];
+  openaiModels: string[];
   agentModel: string;
+  vertexAnthropicModel: string;
+  vertexAnthropicModels: string[];
+  vertexGoogleModel: string;
+  vertexGoogleModels: string[];
   openaiCompatibleEndpointsEnabled: boolean;
   modelEndpoint: string;
   modelEndpointApiKey: string;

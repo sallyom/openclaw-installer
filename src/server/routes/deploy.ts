@@ -57,6 +57,15 @@ function normalizeModelFallbacks(modelFallbacks: string[] | undefined): string[]
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function normalizeStringArray(arr: string[] | undefined): string[] | undefined {
+  if (!Array.isArray(arr)) return undefined;
+  const normalized = arr
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 export function applyServerEnvFallbacks(config: DeployConfig, env: NodeJS.ProcessEnv = process.env): void {
   if (!config.image && env.OPENCLAW_IMAGE) {
     config.image = env.OPENCLAW_IMAGE;
@@ -105,6 +114,8 @@ router.post("/", async (req, res) => {
   config.telegramAllowFrom = trimOptional(config.telegramAllowFrom);
   config.anthropicModel = trimOptional(config.anthropicModel);
   config.openaiModel = trimOptional(config.openaiModel);
+  config.anthropicModels = normalizeStringArray(config.anthropicModels);
+  config.openaiModels = normalizeStringArray(config.openaiModels);
   config.namespace = trimOptional(config.namespace);
   config.a2aRealm = trimOptional(config.a2aRealm);
   config.a2aKeycloakNamespace = trimOptional(config.a2aKeycloakNamespace);

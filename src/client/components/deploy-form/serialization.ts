@@ -53,7 +53,13 @@ export function createInitialDeployFormConfig(): DeployFormConfig {
     openaiApiKey: "",
     anthropicModel: "",
     openaiModel: "",
+    anthropicModels: [],
+    openaiModels: [],
     agentModel: "",
+    vertexAnthropicModel: "",
+    vertexAnthropicModels: [],
+    vertexGoogleModel: "",
+    vertexGoogleModels: [],
     openaiCompatibleEndpointsEnabled: true,
     modelEndpoint: "",
     modelEndpointApiKey: "",
@@ -107,6 +113,12 @@ function decodeEndpointModelsVar(vars: Record<string, unknown>): ModelEndpointOp
   return Array.isArray(vars.modelEndpointModels)
     ? (vars.modelEndpointModels as ModelEndpointOption[])
     : undefined;
+}
+
+function decodeStringArrayVar(vars: Record<string, unknown>, b64Key: string, jsonKey: string): string[] | undefined {
+  const decoded = decodeJsonBase64<string[]>(vars[b64Key] as string | undefined);
+  if (decoded && Array.isArray(decoded)) return decoded;
+  return Array.isArray(vars[jsonKey]) ? (vars[jsonKey] as string[]) : undefined;
 }
 
 function decodeSecretsProvidersJson(vars: Record<string, unknown>): string {
@@ -253,7 +265,17 @@ export function applySavedVarsToConfig(
       port: getStringVar(vars, "OPENCLAW_PORT", "port") || prev.port,
       anthropicModel: getStringVar(vars, "ANTHROPIC_MODEL", "anthropicModel") || prev.anthropicModel,
       openaiModel: getStringVar(vars, "OPENAI_MODEL", "openaiModel") || prev.openaiModel,
+      anthropicModels:
+        decodeStringArrayVar(vars, "ANTHROPIC_MODELS_B64", "anthropicModels") || prev.anthropicModels,
+      openaiModels:
+        decodeStringArrayVar(vars, "OPENAI_MODELS_B64", "openaiModels") || prev.openaiModels,
       agentModel: getStringVar(vars, "AGENT_MODEL", "agentModel") || prev.agentModel,
+      vertexAnthropicModel: getStringVar(vars, "VERTEX_ANTHROPIC_MODEL", "vertexAnthropicModel") || prev.vertexAnthropicModel,
+      vertexAnthropicModels:
+        decodeStringArrayVar(vars, "VERTEX_ANTHROPIC_MODELS_B64", "vertexAnthropicModels") || prev.vertexAnthropicModels,
+      vertexGoogleModel: getStringVar(vars, "VERTEX_GOOGLE_MODEL", "vertexGoogleModel") || prev.vertexGoogleModel,
+      vertexGoogleModels:
+        decodeStringArrayVar(vars, "VERTEX_GOOGLE_MODELS_B64", "vertexGoogleModels") || prev.vertexGoogleModels,
       openaiCompatibleEndpointsEnabled:
         vars.OPENAI_COMPATIBLE_ENDPOINTS_ENABLED === "false"
           ? false
@@ -364,8 +386,14 @@ export function buildDeployRequestBody(params: {
     anthropicApiKey: !anthropicApiKeyRef ? trimToUndefined(config.anthropicApiKey) : undefined,
     openaiApiKey: !openaiApiKeyRef ? trimToUndefined(config.openaiApiKey) : undefined,
     anthropicModel: trimToUndefined(config.anthropicModel),
+    anthropicModels: config.anthropicModels.length > 0 ? config.anthropicModels : undefined,
     openaiModel: trimToUndefined(config.openaiModel),
+    openaiModels: config.openaiModels.length > 0 ? config.openaiModels : undefined,
     agentModel: config.agentModel || undefined,
+    vertexAnthropicModel: trimToUndefined(config.vertexAnthropicModel),
+    vertexAnthropicModels: config.vertexAnthropicModels.length > 0 ? config.vertexAnthropicModels : undefined,
+    vertexGoogleModel: trimToUndefined(config.vertexGoogleModel),
+    vertexGoogleModels: config.vertexGoogleModels.length > 0 ? config.vertexGoogleModels : undefined,
     openaiCompatibleEndpointsEnabled: config.openaiCompatibleEndpointsEnabled,
     modelEndpoint: trimToUndefined(config.modelEndpoint),
     modelEndpointApiKey: trimToUndefined(config.modelEndpointApiKey),
@@ -433,7 +461,9 @@ export function buildEnvFileContent(params: {
     `ANTHROPIC_API_KEY=${anthropicApiKeyRef ? "" : config.anthropicApiKey}`,
     `OPENAI_API_KEY=${openaiApiKeyRef ? "" : config.openaiApiKey}`,
     `ANTHROPIC_MODEL=${config.anthropicModel}`,
+    `ANTHROPIC_MODELS_B64=${encodeBase64(JSON.stringify(config.anthropicModels))}`,
     `OPENAI_MODEL=${config.openaiModel}`,
+    `OPENAI_MODELS_B64=${encodeBase64(JSON.stringify(config.openaiModels))}`,
     `OPENAI_COMPATIBLE_ENDPOINTS_ENABLED=${config.openaiCompatibleEndpointsEnabled}`,
     `MODEL_ENDPOINT=${config.modelEndpoint}`,
     `MODEL_ENDPOINT_API_KEY=${config.modelEndpointApiKey}`,
@@ -441,6 +471,10 @@ export function buildEnvFileContent(params: {
     `MODEL_ENDPOINT_MODEL_LABEL=${config.modelEndpointModelLabel}`,
     `MODEL_ENDPOINT_MODELS_B64=${encodeBase64(JSON.stringify(config.modelEndpointModels))}`,
     `AGENT_MODEL=${config.agentModel}`,
+    `VERTEX_ANTHROPIC_MODEL=${config.vertexAnthropicModel}`,
+    `VERTEX_ANTHROPIC_MODELS_B64=${encodeBase64(JSON.stringify(config.vertexAnthropicModels))}`,
+    `VERTEX_GOOGLE_MODEL=${config.vertexGoogleModel}`,
+    `VERTEX_GOOGLE_MODELS_B64=${encodeBase64(JSON.stringify(config.vertexGoogleModels))}`,
     "",
     `VERTEX_ENABLED=${isVertex}`,
     `VERTEX_PROVIDER=${inferenceProvider === "vertex-google" ? "google" : "anthropic"}`,

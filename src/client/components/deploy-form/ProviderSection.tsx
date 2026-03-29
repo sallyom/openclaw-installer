@@ -4,7 +4,6 @@ import {
   MODEL_DEFAULTS,
   MODEL_HINTS,
   PROVIDER_OPTIONS,
-  PROXY_MODEL_HINTS,
 } from "./constants.js";
 import type {
   DeployFormConfig,
@@ -20,11 +19,24 @@ interface ProviderSectionProps {
   fetchModelEndpointOptions: () => Promise<void>;
   gcpDefaults: GcpDefaults | null;
   inferenceProvider: InferenceProvider;
-  isVertex: boolean;
   loadingModelEndpointOptions: boolean;
   mode: string;
   modelEndpointOptions: ModelEndpointOption[];
   modelEndpointOptionsError: string | null;
+  loadingAnthropicModels: boolean;
+  loadingOpenaiModels: boolean;
+  anthropicModelOptions: Array<{ id: string; name: string }>;
+  openaiModelOptions: Array<{ id: string; name: string }>;
+  anthropicModelsError: string | null;
+  openaiModelsError: string | null;
+  loadingVertexAnthropicModels: boolean;
+  vertexAnthropicModelOptions: Array<{ id: string; name: string }>;
+  vertexAnthropicModelsError: string | null;
+  vertexAnthropicModelsWarning: string | null;
+  loadingVertexGoogleModels: boolean;
+  vertexGoogleModelOptions: Array<{ id: string; name: string }>;
+  vertexGoogleModelsError: string | null;
+  vertexGoogleModelsWarning: string | null;
   setConfig: Dispatch<SetStateAction<DeployFormConfig>>;
   setInferenceProvider: Dispatch<SetStateAction<InferenceProvider>>;
   update: (field: string, value: string) => void;
@@ -49,11 +61,24 @@ export function ProviderSection({
   fetchModelEndpointOptions,
   gcpDefaults,
   inferenceProvider,
-  isVertex,
   loadingModelEndpointOptions,
   mode,
   modelEndpointOptions,
   modelEndpointOptionsError,
+  loadingAnthropicModels,
+  loadingOpenaiModels,
+  anthropicModelOptions,
+  openaiModelOptions,
+  anthropicModelsError,
+  openaiModelsError,
+  loadingVertexAnthropicModels,
+  vertexAnthropicModelOptions,
+  vertexAnthropicModelsError,
+  vertexAnthropicModelsWarning,
+  loadingVertexGoogleModels,
+  vertexGoogleModelOptions,
+  vertexGoogleModelsError,
+  vertexGoogleModelsWarning,
   setConfig,
   setInferenceProvider,
   update,
@@ -110,6 +135,47 @@ export function ProviderSection({
             </div>
             <div className="form-group">
               <label>Anthropic Model</label>
+              {loadingAnthropicModels && (
+                <div className="hint">Loading models...</div>
+              )}
+              {anthropicModelsError && (
+                <div className="hint" style={{ color: "#e74c3c" }}>{anthropicModelsError}</div>
+              )}
+              {anthropicModelOptions.length > 0 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", marginBottom: "0.5rem", maxHeight: "150px", overflowY: "auto", border: "1px solid var(--border)", borderRadius: "6px", padding: "0.5rem" }}>
+                  {anthropicModelOptions.map((option) => {
+                    const isSelected = config.anthropicModel === option.id || config.anthropicModels.includes(option.id);
+                    return (
+                      <label key={option.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.85rem", cursor: "pointer" }}>
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => {
+                            setConfig((prev) => {
+                              if (isSelected) {
+                                // Unchecking: remove from primary or additional
+                                if (prev.anthropicModel === option.id) {
+                                  return { ...prev, anthropicModel: "" };
+                                }
+                                return { ...prev, anthropicModels: prev.anthropicModels.filter((m) => m !== option.id) };
+                              }
+                              // Checking: if no primary set, use as primary; otherwise add to additional
+                              if (!prev.anthropicModel.trim()) {
+                                return { ...prev, anthropicModel: option.id };
+                              }
+                              return { ...prev, anthropicModels: [...prev.anthropicModels, option.id] };
+                            });
+                          }}
+                          style={{ width: "auto" }}
+                        />
+                        <code>{option.id}</code>
+                        {option.name !== option.id && <span style={{ color: "var(--text-secondary)" }}>({option.name})</span>}
+                        {config.anthropicModel === option.id && <span style={{ color: "var(--text-secondary)", fontStyle: "italic" }}>(primary)</span>}
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
               <input
                 type="text"
                 placeholder="e.g., claude-sonnet-4-6"
@@ -117,7 +183,56 @@ export function ProviderSection({
                 onChange={(e) => update("anthropicModel", e.target.value)}
               />
               <div className="hint">
-                Adds this Anthropic model to the OpenClaw model picker as <code>anthropic/&lt;model&gt;</code>.
+                Primary model used as the default in the OpenClaw model picker as <code>anthropic/&lt;model&gt;</code>.
+              </div>
+            </div>
+            <div className="form-group">
+              <label>Additional Models</label>
+              {config.anthropicModels.map((modelId, index) => (
+                <div key={index} style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginBottom: "0.25rem" }}>
+                  <input
+                    type="text"
+                    placeholder="e.g., claude-opus-4-6"
+                    value={modelId}
+                    onChange={(e) => {
+                      setConfig((prev) => ({
+                        ...prev,
+                        anthropicModels: prev.anthropicModels.map((m, i) => i === index ? e.target.value : m),
+                      }));
+                    }}
+                    style={{ flex: 1 }}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    style={{ padding: "0.25rem 0.5rem" }}
+                    onClick={() => {
+                      setConfig((prev) => ({
+                        ...prev,
+                        anthropicModels: prev.anthropicModels.filter((_, i) => i !== index),
+                      }));
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                className="btn btn-ghost"
+                style={{ fontSize: "0.85rem", padding: "0.25rem 0.5rem", marginTop: "0.25rem" }}
+                disabled={!config.anthropicModel.trim()}
+                onClick={() => {
+                  setConfig((prev) => ({
+                    ...prev,
+                    anthropicModels: [...prev.anthropicModels, ""],
+                  }));
+                }}
+              >
+                + Add Model
+              </button>
+              <div className="hint">
+                Additional models appear in the OpenClaw model picker as <code>anthropic/&lt;model&gt;</code>.
               </div>
             </div>
           </>
@@ -143,6 +258,44 @@ export function ProviderSection({
             </div>
             <div className="form-group">
               <label>OpenAI Model</label>
+              {loadingOpenaiModels && (
+                <div className="hint">Loading models...</div>
+              )}
+              {openaiModelsError && (
+                <div className="hint" style={{ color: "#e74c3c" }}>{openaiModelsError}</div>
+              )}
+              {openaiModelOptions.length > 0 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", marginBottom: "0.5rem", maxHeight: "150px", overflowY: "auto", border: "1px solid var(--border)", borderRadius: "6px", padding: "0.5rem" }}>
+                  {openaiModelOptions.map((option) => {
+                    const isSelected = config.openaiModel === option.id || config.openaiModels.includes(option.id);
+                    return (
+                      <label key={option.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.85rem", cursor: "pointer" }}>
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => {
+                            setConfig((prev) => {
+                              if (isSelected) {
+                                if (prev.openaiModel === option.id) {
+                                  return { ...prev, openaiModel: "" };
+                                }
+                                return { ...prev, openaiModels: prev.openaiModels.filter((m) => m !== option.id) };
+                              }
+                              if (!prev.openaiModel.trim()) {
+                                return { ...prev, openaiModel: option.id };
+                              }
+                              return { ...prev, openaiModels: [...prev.openaiModels, option.id] };
+                            });
+                          }}
+                          style={{ width: "auto" }}
+                        />
+                        <code>{option.id}</code>
+                        {config.openaiModel === option.id && <span style={{ color: "var(--text-secondary)", fontStyle: "italic" }}>(primary)</span>}
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
               <input
                 type="text"
                 placeholder="e.g., gpt-5"
@@ -150,7 +303,56 @@ export function ProviderSection({
                 onChange={(e) => update("openaiModel", e.target.value)}
               />
               <div className="hint">
-                Adds this OpenAI model to the OpenClaw model picker as <code>openai/&lt;model&gt;</code>.
+                Primary model used as the default in the OpenClaw model picker as <code>openai/&lt;model&gt;</code>.
+              </div>
+            </div>
+            <div className="form-group">
+              <label>Additional Models</label>
+              {config.openaiModels.map((modelId, index) => (
+                <div key={index} style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginBottom: "0.25rem" }}>
+                  <input
+                    type="text"
+                    placeholder="e.g., gpt-5.3"
+                    value={modelId}
+                    onChange={(e) => {
+                      setConfig((prev) => ({
+                        ...prev,
+                        openaiModels: prev.openaiModels.map((m, i) => i === index ? e.target.value : m),
+                      }));
+                    }}
+                    style={{ flex: 1 }}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    style={{ padding: "0.25rem 0.5rem" }}
+                    onClick={() => {
+                      setConfig((prev) => ({
+                        ...prev,
+                        openaiModels: prev.openaiModels.filter((_, i) => i !== index),
+                      }));
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                className="btn btn-ghost"
+                style={{ fontSize: "0.85rem", padding: "0.25rem 0.5rem", marginTop: "0.25rem" }}
+                disabled={!config.openaiModel.trim()}
+                onClick={() => {
+                  setConfig((prev) => ({
+                    ...prev,
+                    openaiModels: [...prev.openaiModels, ""],
+                  }));
+                }}
+              >
+                + Add Model
+              </button>
+              <div className="hint">
+                Additional models appear in the OpenClaw model picker as <code>openai/&lt;model&gt;</code>.
               </div>
             </div>
           </>
@@ -296,6 +498,129 @@ export function ProviderSection({
                   && " Leave blank to use credentials detected from environment."}
               </div>
             </div>
+
+            {(() => {
+              const isVertexAnthropic = provider === "vertex-anthropic";
+              const modelField = isVertexAnthropic ? "vertexAnthropicModel" : "vertexGoogleModel";
+              const modelsField = isVertexAnthropic ? "vertexAnthropicModels" : "vertexGoogleModels";
+              const modelValue = isVertexAnthropic ? config.vertexAnthropicModel : config.vertexGoogleModel;
+              const modelsValue = isVertexAnthropic ? config.vertexAnthropicModels : config.vertexGoogleModels;
+              const placeholder = isVertexAnthropic ? "claude-sonnet-4-6" : "gemini-2.5-pro";
+              const addPlaceholder = isVertexAnthropic ? "e.g., claude-opus-4-6" : "e.g., gemini-2.5-flash";
+              const loading = isVertexAnthropic ? loadingVertexAnthropicModels : loadingVertexGoogleModels;
+              const options = isVertexAnthropic ? vertexAnthropicModelOptions : vertexGoogleModelOptions;
+              const error = isVertexAnthropic ? vertexAnthropicModelsError : vertexGoogleModelsError;
+              const warning = isVertexAnthropic ? vertexAnthropicModelsWarning : vertexGoogleModelsWarning;
+              return (
+                <>
+                  <div className="form-group">
+                    <label>Model</label>
+                    {loading && (
+                      <div className="hint">Loading models...</div>
+                    )}
+                    {error && (
+                      <div className="hint" style={{ color: "#e74c3c" }}>{error}</div>
+                    )}
+                    {warning && !error && (
+                      <div className="hint">{warning}</div>
+                    )}
+                    {options.length > 0 && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", marginBottom: "0.5rem", maxHeight: "150px", overflowY: "auto", border: "1px solid var(--border)", borderRadius: "6px", padding: "0.5rem" }}>
+                        {options.map((option) => {
+                          const isSelected = modelValue === option.id || modelsValue.includes(option.id);
+                          return (
+                            <label key={option.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.85rem", cursor: "pointer" }}>
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => {
+                                  setConfig((prev) => {
+                                    const prevModel = prev[modelField] as string;
+                                    const prevModels = prev[modelsField] as string[];
+                                    if (isSelected) {
+                                      if (prevModel === option.id) {
+                                        return { ...prev, [modelField]: "" };
+                                      }
+                                      return { ...prev, [modelsField]: prevModels.filter((m) => m !== option.id) };
+                                    }
+                                    if (!prevModel.trim()) {
+                                      return { ...prev, [modelField]: option.id };
+                                    }
+                                    return { ...prev, [modelsField]: [...prevModels, option.id] };
+                                  });
+                                }}
+                                style={{ width: "auto" }}
+                              />
+                              <code>{option.id}</code>
+                              {option.name !== option.id && <span style={{ color: "var(--text-secondary)" }}>({option.name})</span>}
+                              {modelValue === option.id && <span style={{ color: "var(--text-secondary)", fontStyle: "italic" }}>(primary)</span>}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                    <input
+                      type="text"
+                      placeholder={placeholder}
+                      value={modelValue}
+                      onChange={(e) => update(modelField, e.target.value)}
+                    />
+                    <div className="hint">
+                      Primary model used as the default in the OpenClaw model picker.
+                    </div>
+                  </div>
+                  <div className="form-group">
+                    <label>Additional Models</label>
+                    {modelsValue.map((modelId, index) => (
+                      <div key={index} style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginBottom: "0.25rem" }}>
+                        <input
+                          type="text"
+                          placeholder={addPlaceholder}
+                          value={modelId}
+                          onChange={(e) => {
+                            setConfig((prev) => ({
+                              ...prev,
+                              [modelsField]: (prev[modelsField] as string[]).map((m, i) => i === index ? e.target.value : m),
+                            }));
+                          }}
+                          style={{ flex: 1 }}
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          style={{ padding: "0.25rem 0.5rem" }}
+                          onClick={() => {
+                            setConfig((prev) => ({
+                              ...prev,
+                              [modelsField]: (prev[modelsField] as string[]).filter((_, i) => i !== index),
+                            }));
+                          }}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      style={{ fontSize: "0.85rem", padding: "0.25rem 0.5rem", marginTop: "0.25rem" }}
+                      disabled={!modelValue.trim()}
+                      onClick={() => {
+                        setConfig((prev) => ({
+                          ...prev,
+                          [modelsField]: [...(prev[modelsField] as string[]), ""],
+                        }));
+                      }}
+                    >
+                      + Add Model
+                    </button>
+                    <div className="hint">
+                      Additional models appear in the OpenClaw model picker.
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
 
             <div className="form-group">
               <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
@@ -459,26 +784,23 @@ export function ProviderSection({
           </div>
         </div>
 
-        <div className="form-group" style={{ marginTop: "0.75rem" }}>
-          <label>Primary Model</label>
-          <input
-            type="text"
-            placeholder={
-              isVertex && config.litellmProxy
-                ? (inferenceProvider === "vertex-anthropic" ? "claude-sonnet-4-6" : "gemini-2.5-pro")
-                : (MODEL_DEFAULTS[inferenceProvider] || "model-id")
-            }
-            value={config.agentModel}
-            onChange={(e) => update("agentModel", e.target.value)}
-          />
-          <div className="hint">
-            {config.agentModel
-              ? "Custom primary model override"
-              : isVertex && config.litellmProxy
-                ? `Leave blank for default (routed through LiteLLM proxy). ${PROXY_MODEL_HINTS[inferenceProvider] || MODEL_HINTS[inferenceProvider]}`
+        {/* Show Primary Model field for custom endpoint only — Anthropic/OpenAI/Vertex have their own model fields */}
+        {inferenceProvider === "custom-endpoint" && (
+          <div className="form-group" style={{ marginTop: "0.75rem" }}>
+            <label>Primary Model</label>
+            <input
+              type="text"
+              placeholder={MODEL_DEFAULTS[inferenceProvider] || "model-id"}
+              value={config.agentModel}
+              onChange={(e) => update("agentModel", e.target.value)}
+            />
+            <div className="hint">
+              {config.agentModel
+                ? "Custom primary model override"
                 : `Leave blank for default${MODEL_DEFAULTS[inferenceProvider] ? ` (${MODEL_DEFAULTS[inferenceProvider]})` : ""}. ${MODEL_HINTS[inferenceProvider]}`}
+            </div>
           </div>
-        </div>
+        )}
 
         <div className="form-group" style={{ marginTop: "0.75rem" }}>
           <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>

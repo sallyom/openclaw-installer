@@ -57,6 +57,20 @@ export default function DeployForm({ onDeployStarted }: DeployFormProps) {
   const [modelEndpointOptions, setModelEndpointOptions] = useState<ModelEndpointOption[]>([]);
   const [loadingModelEndpointOptions, setLoadingModelEndpointOptions] = useState(false);
   const [modelEndpointOptionsError, setModelEndpointOptionsError] = useState<string | null>(null);
+  const [anthropicModelOptions, setAnthropicModelOptions] = useState<ModelEndpointOption[]>([]);
+  const [loadingAnthropicModels, setLoadingAnthropicModels] = useState(false);
+  const [anthropicModelsError, setAnthropicModelsError] = useState<string | null>(null);
+  const [openaiModelOptions, setOpenaiModelOptions] = useState<ModelEndpointOption[]>([]);
+  const [loadingOpenaiModels, setLoadingOpenaiModels] = useState(false);
+  const [openaiModelsError, setOpenaiModelsError] = useState<string | null>(null);
+  const [vertexAnthropicModelOptions, setVertexAnthropicModelOptions] = useState<ModelEndpointOption[]>([]);
+  const [loadingVertexAnthropicModels, setLoadingVertexAnthropicModels] = useState(false);
+  const [vertexAnthropicModelsError, setVertexAnthropicModelsError] = useState<string | null>(null);
+  const [vertexAnthropicModelsWarning, setVertexAnthropicModelsWarning] = useState<string | null>(null);
+  const [vertexGoogleModelOptions, setVertexGoogleModelOptions] = useState<ModelEndpointOption[]>([]);
+  const [loadingVertexGoogleModels, setLoadingVertexGoogleModels] = useState(false);
+  const [vertexGoogleModelsError, setVertexGoogleModelsError] = useState<string | null>(null);
+  const [vertexGoogleModelsWarning, setVertexGoogleModelsWarning] = useState<string | null>(null);
   const previousModelEndpointRef = useRef("");
 
   const isClusterMode = mode === "kubernetes" || mode === "openshift";
@@ -415,6 +429,148 @@ export default function DeployForm({ onDeployStarted }: DeployFormProps) {
       setLoadingModelEndpointOptions(false);
     }
   };
+
+  const fetchAnthropicModelOptions = async () => {
+    const apiKey = config.anthropicApiKey.trim();
+    if (!apiKey && !defaults?.hasAnthropicKey) {
+      setAnthropicModelsError("Enter an Anthropic API key first.");
+      return;
+    }
+    setLoadingAnthropicModels(true);
+    setAnthropicModelsError(null);
+    try {
+      const res = await fetch("/api/configs/anthropic-models", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey: apiKey || undefined }),
+      });
+      const data = await res.json() as { models?: ModelEndpointOption[]; error?: string };
+      if (!res.ok) {
+        throw new Error(data.error || `Failed to fetch models (${res.status})`);
+      }
+      setAnthropicModelOptions(Array.isArray(data.models) ? data.models : []);
+    } catch (err) {
+      setAnthropicModelsError(err instanceof Error ? err.message : "Failed to fetch Anthropic models");
+    } finally {
+      setLoadingAnthropicModels(false);
+    }
+  };
+
+  const fetchOpenaiModelOptions = async () => {
+    const apiKey = config.openaiApiKey.trim();
+    if (!apiKey && !defaults?.hasOpenaiKey) {
+      setOpenaiModelsError("Enter an OpenAI API key first.");
+      return;
+    }
+    setLoadingOpenaiModels(true);
+    setOpenaiModelsError(null);
+    try {
+      const res = await fetch("/api/configs/openai-models", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey: apiKey || undefined }),
+      });
+      const data = await res.json() as { models?: ModelEndpointOption[]; error?: string };
+      if (!res.ok) {
+        throw new Error(data.error || `Failed to fetch models (${res.status})`);
+      }
+      setOpenaiModelOptions(Array.isArray(data.models) ? data.models : []);
+    } catch (err) {
+      setOpenaiModelsError(err instanceof Error ? err.message : "Failed to fetch OpenAI models");
+    } finally {
+      setLoadingOpenaiModels(false);
+    }
+  };
+
+  const fetchVertexAnthropicModelOptions = async () => {
+    setLoadingVertexAnthropicModels(true);
+    setVertexAnthropicModelsError(null);
+    setVertexAnthropicModelsWarning(null);
+    try {
+      const res = await fetch("/api/configs/vertex-models", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          saJson: config.gcpServiceAccountJson || undefined,
+          project: config.googleCloudProject || undefined,
+          location: config.googleCloudLocation || undefined,
+          vertexProvider: "anthropic",
+          anthropicApiKey: config.anthropicApiKey || undefined,
+        }),
+      });
+      const data = await res.json() as { models?: ModelEndpointOption[]; error?: string; warning?: string };
+      if (!res.ok) {
+        throw new Error(data.error || `Failed to fetch models (${res.status})`);
+      }
+      setVertexAnthropicModelOptions(Array.isArray(data.models) ? data.models : []);
+      if (data.warning) setVertexAnthropicModelsWarning(data.warning);
+    } catch (err) {
+      setVertexAnthropicModelsError(err instanceof Error ? err.message : "Failed to fetch Vertex models");
+    } finally {
+      setLoadingVertexAnthropicModels(false);
+    }
+  };
+
+  const fetchVertexGoogleModelOptions = async () => {
+    setLoadingVertexGoogleModels(true);
+    setVertexGoogleModelsError(null);
+    setVertexGoogleModelsWarning(null);
+    try {
+      const res = await fetch("/api/configs/vertex-models", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          saJson: config.gcpServiceAccountJson || undefined,
+          project: config.googleCloudProject || undefined,
+          location: config.googleCloudLocation || undefined,
+          vertexProvider: "google",
+        }),
+      });
+      const data = await res.json() as { models?: ModelEndpointOption[]; error?: string; warning?: string };
+      if (!res.ok) {
+        throw new Error(data.error || `Failed to fetch models (${res.status})`);
+      }
+      setVertexGoogleModelOptions(Array.isArray(data.models) ? data.models : []);
+      if (data.warning) setVertexGoogleModelsWarning(data.warning);
+    } catch (err) {
+      setVertexGoogleModelsError(err instanceof Error ? err.message : "Failed to fetch Vertex models");
+    } finally {
+      setLoadingVertexGoogleModels(false);
+    }
+  };
+
+  // Auto-fetch model lists when credentials become available
+  const anthropicKeyForFetch = config.anthropicApiKey.trim() || (defaults?.hasAnthropicKey ? "__env__" : "");
+  const prevAnthropicKeyRef = useRef("");
+  useEffect(() => {
+    if (anthropicKeyForFetch && anthropicKeyForFetch !== prevAnthropicKeyRef.current) {
+      prevAnthropicKeyRef.current = anthropicKeyForFetch;
+      fetchAnthropicModelOptions();
+    }
+  }, [anthropicKeyForFetch]);
+
+  const openaiKeyForFetch = config.openaiApiKey.trim() || (defaults?.hasOpenaiKey ? "__env__" : "");
+  const prevOpenaiKeyRef = useRef("");
+  useEffect(() => {
+    if (openaiKeyForFetch && openaiKeyForFetch !== prevOpenaiKeyRef.current) {
+      prevOpenaiKeyRef.current = openaiKeyForFetch;
+      fetchOpenaiModelOptions();
+    }
+  }, [openaiKeyForFetch]);
+
+  const vertexCredsForFetch = (config.gcpServiceAccountJson || gcpDefaults?.hasServiceAccountJson ? "has-creds" : "")
+    + "|" + (config.googleCloudProject || gcpDefaults?.projectId || "")
+    + "|" + (config.googleCloudLocation || gcpDefaults?.location || "");
+  const prevVertexCredsRef = useRef("");
+  useEffect(() => {
+    const hasCreds = config.gcpServiceAccountJson || gcpDefaults?.hasServiceAccountJson;
+    const hasProject = config.googleCloudProject || gcpDefaults?.projectId;
+    if (hasCreds && hasProject && vertexCredsForFetch !== prevVertexCredsRef.current) {
+      prevVertexCredsRef.current = vertexCredsForFetch;
+      fetchVertexAnthropicModelOptions();
+      fetchVertexGoogleModelOptions();
+    }
+  }, [vertexCredsForFetch]);
 
   const handleDeploy = async () => {
     if (!isValid) {
@@ -984,7 +1140,6 @@ export default function DeployForm({ onDeployStarted }: DeployFormProps) {
           fetchModelEndpointOptions={fetchModelEndpointOptions}
           gcpDefaults={gcpDefaults}
           inferenceProvider={inferenceProvider}
-          isVertex={isVertex}
           loadingModelEndpointOptions={loadingModelEndpointOptions}
           mode={mode}
           modelEndpointOptions={modelEndpointOptions}
@@ -992,6 +1147,20 @@ export default function DeployForm({ onDeployStarted }: DeployFormProps) {
           setConfig={setConfig}
           setInferenceProvider={setInferenceProvider}
           update={update}
+          loadingAnthropicModels={loadingAnthropicModels}
+          loadingOpenaiModels={loadingOpenaiModels}
+          anthropicModelOptions={anthropicModelOptions}
+          openaiModelOptions={openaiModelOptions}
+          anthropicModelsError={anthropicModelsError}
+          openaiModelsError={openaiModelsError}
+          loadingVertexAnthropicModels={loadingVertexAnthropicModels}
+          vertexAnthropicModelOptions={vertexAnthropicModelOptions}
+          vertexAnthropicModelsError={vertexAnthropicModelsError}
+          vertexAnthropicModelsWarning={vertexAnthropicModelsWarning}
+          loadingVertexGoogleModels={loadingVertexGoogleModels}
+          vertexGoogleModelOptions={vertexGoogleModelOptions}
+          vertexGoogleModelsError={vertexGoogleModelsError}
+          vertexGoogleModelsWarning={vertexGoogleModelsWarning}
         />
 
         <h3 style={{ marginTop: "1.5rem" }}>Observability</h3>

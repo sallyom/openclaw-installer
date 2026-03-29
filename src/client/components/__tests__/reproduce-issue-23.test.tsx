@@ -2,7 +2,10 @@
  * Regression tests for issue #23:
  * "Custom model override carries over across providers"
  *
- * Verifies that switching inference providers clears the custom model field.
+ * Verifies that switching inference providers clears the agentModel field
+ * (used by Vertex/custom-endpoint). Provider-specific fields (anthropicModel,
+ * openaiModel) persist across switches since they may be used as secondary
+ * providers.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
@@ -54,8 +57,8 @@ function getProviderSelect() {
   return screen.getByText("Primary Provider").closest(".form-group")!.querySelector("select")! as HTMLSelectElement;
 }
 
-function getModelInput() {
-  return screen.getByText("Primary Model").closest(".form-group")!.querySelector("input")! as HTMLInputElement;
+function getModelInput(label: string) {
+  return screen.getByText(label).closest(".form-group")!.querySelector("input[type='text']")! as HTMLInputElement;
 }
 
 describe("Issue #23: Custom model override carries over across providers", () => {
@@ -64,65 +67,61 @@ describe("Issue #23: Custom model override carries over across providers", () =>
     vi.restoreAllMocks();
   });
 
-  it("clears agentModel when switching from Anthropic to OpenAI", async () => {
+  it("clears agentModel when switching from Vertex to another provider", async () => {
     global.fetch = mockFetch();
     render(<DeployForm onDeployStarted={() => {}} />);
     await screen.findByText("This Machine");
 
     const providerSelect = getProviderSelect();
-    const modelInput = getModelInput();
 
-    // Set a custom model for Anthropic
-    fireEvent.change(modelInput, { target: { value: "claude-opus-4-6" } });
-    expect(modelInput.value).toBe("claude-opus-4-6");
+    // Switch to Vertex and set a custom model via the Vertex Model field
+    fireEvent.change(providerSelect, { target: { value: "vertex-anthropic" } });
+    const vertexInput = screen.getByPlaceholderText("claude-sonnet-4-6") as HTMLInputElement;
+    fireEvent.change(vertexInput, { target: { value: "claude-opus-4-6" } });
+    expect(vertexInput.value).toBe("claude-opus-4-6");
 
-    // Switch to OpenAI — model should be cleared
+    // Switch to OpenAI — agentModel should be cleared, OpenAI model field starts empty
     fireEvent.change(providerSelect, { target: { value: "openai" } });
     await waitFor(() => {
-      expect(modelInput.value).toBe("");
+      const openaiInput = getModelInput("OpenAI Model");
+      expect(openaiInput.value).toBe("");
     });
   });
 
-  it("clears agentModel when switching from OpenAI to Vertex", async () => {
+  it("clears agentModel when switching between Vertex providers", async () => {
     global.fetch = mockFetch();
     render(<DeployForm onDeployStarted={() => {}} />);
     await screen.findByText("This Machine");
 
     const providerSelect = getProviderSelect();
-    const modelInput = getModelInput();
 
-    // Switch to OpenAI and set a custom model
-    fireEvent.change(providerSelect, { target: { value: "openai" } });
-    fireEvent.change(modelInput, { target: { value: "openai/gpt-5" } });
-    expect(modelInput.value).toBe("openai/gpt-5");
+    // Switch to Vertex Google and set a model
+    fireEvent.change(providerSelect, { target: { value: "vertex-google" } });
+    const vertexInput = screen.getByPlaceholderText("gemini-2.5-pro") as HTMLInputElement;
+    fireEvent.change(vertexInput, { target: { value: "gemini-2.5-flash" } });
+    expect(vertexInput.value).toBe("gemini-2.5-flash");
 
-    // Switch to Vertex Anthropic — model should be cleared
+    // Switch to Vertex Anthropic — agentModel should be cleared
     fireEvent.change(providerSelect, { target: { value: "vertex-anthropic" } });
     await waitFor(() => {
-      expect(modelInput.value).toBe("");
+      const newVertexInput = screen.getByPlaceholderText("claude-sonnet-4-6") as HTMLInputElement;
+      expect(newVertexInput.value).toBe("");
     });
   });
 
-  it("clears agentModel on every consecutive provider switch", async () => {
+  it("OpenAI model field starts empty on first visit", async () => {
     global.fetch = mockFetch();
     render(<DeployForm onDeployStarted={() => {}} />);
     await screen.findByText("This Machine");
 
     const providerSelect = getProviderSelect();
-    const modelInput = getModelInput();
 
-    // Set model, switch, verify cleared — repeat for multiple providers
-    fireEvent.change(modelInput, { target: { value: "model-a" } });
+    // Switch to OpenAI — model field should be empty
     fireEvent.change(providerSelect, { target: { value: "openai" } });
-    await waitFor(() => expect(modelInput.value).toBe(""));
-
-    fireEvent.change(modelInput, { target: { value: "model-b" } });
-    fireEvent.change(providerSelect, { target: { value: "vertex-google" } });
-    await waitFor(() => expect(modelInput.value).toBe(""));
-
-    fireEvent.change(modelInput, { target: { value: "model-c" } });
-    fireEvent.change(providerSelect, { target: { value: "anthropic" } });
-    await waitFor(() => expect(modelInput.value).toBe(""));
+    await waitFor(() => {
+      const openaiInput = getModelInput("OpenAI Model");
+      expect(openaiInput.value).toBe("");
+    });
   });
 
   it("does not interfere when model field is already empty", async () => {
@@ -131,13 +130,14 @@ describe("Issue #23: Custom model override carries over across providers", () =>
     await screen.findByText("This Machine");
 
     const providerSelect = getProviderSelect();
-    const modelInput = getModelInput();
+    const modelInput = getModelInput("Anthropic Model");
 
     // Switch without setting a model — should remain empty
     expect(modelInput.value).toBe("");
     fireEvent.change(providerSelect, { target: { value: "openai" } });
     await waitFor(() => {
-      expect(modelInput.value).toBe("");
+      const openaiInput = getModelInput("OpenAI Model");
+      expect(openaiInput.value).toBe("");
     });
   });
 });
