@@ -192,12 +192,16 @@ export class OpenShiftDeployer implements Deployer {
             // meaningfully dangerous in practice.
             parsed.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
           }
-          if (parsed.gateway) {
-            const existingTrustedProxies = Array.isArray(parsed.gateway.trustedProxies)
-              ? parsed.gateway.trustedProxies.filter((value: unknown): value is string => typeof value === "string" && value.trim().length > 0)
-              : [];
-            parsed.gateway.trustedProxies = Array.from(new Set([...existingTrustedProxies, "127.0.0.1", "::1"]));
-          }
+          // NOTE: we intentionally do NOT set gateway.trustedProxies here.
+          // Setting trustedProxies to ["127.0.0.1", "::1"] causes the gateway
+          // to treat agent subprocess connections as proxy connections (looks
+          // for X-Forwarded-For headers that aren't there), which breaks
+          // shouldAllowSilentLocalPairing and blocks subagent spawning (#69).
+          // Without trustedProxies, the gateway logs a cosmetic warning about
+          // "proxy headers from untrusted address" but the Control UI still
+          // works because dangerouslyDisableDeviceAuth bypasses device auth.
+          // See ADR 0002 for full rationale.
+
           // Bind to loopback since OAuth proxy fronts the gateway
           if (parsed.gateway) {
             parsed.gateway.bind = "loopback";

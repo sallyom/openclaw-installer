@@ -380,6 +380,10 @@ export function buildOpenClawConfig(config: DeployConfig, gatewayToken: string):
   const sourceBundle = loadAgentSourceBundle(config);
   const controlUi: Record<string, unknown> = {
     enabled: true,
+    // Bypass first-connect browser pairing — the gateway is behind K8s
+    // network policies and token auth, so device-level auth adds friction
+    // without meaningful security benefit (fixes #69).
+    dangerouslyDisableDeviceAuth: true,
   };
   controlUi.allowedOrigins = ["http://localhost:18789"];
   const useOtel = shouldUseOtel(config);
