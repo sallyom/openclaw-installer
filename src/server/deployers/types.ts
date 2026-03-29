@@ -64,6 +64,10 @@ export interface DeployConfig {
   openaiModels?: string[];
   inferenceProvider?: InferenceProvider;
   agentModel?: string;
+  vertexAnthropicModel?: string;
+  vertexAnthropicModels?: string[];
+  vertexGoogleModel?: string;
+  vertexGoogleModels?: string[];
   modelFallbacks?: string[];
   openaiCompatibleEndpointsEnabled?: boolean;
   modelEndpoint?: string;

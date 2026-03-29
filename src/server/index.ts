@@ -12,7 +12,7 @@ import { isClusterReachable, currentContext, currentNamespace, resetKubeConfig }
 import { stopAllK8sPortForwards } from "./services/k8s-port-forward.js";
 import { detectGcpDefaults } from "./services/gcp.js";
 import { fetchModelEndpointCatalog } from "./services/model-endpoint.js";
-import { fetchAnthropicModels, fetchOpenaiModels } from "./services/model-discovery.js";
+import { fetchAnthropicModels, fetchOpenaiModels, fetchVertexModels } from "./services/model-discovery.js";
 import { readdir, readFile } from "node:fs/promises";
 import { userInfo } from "node:os";
 import { installerDataDir } from "./paths.js";
@@ -231,6 +231,36 @@ app.post("/api/configs/openai-models", async (req, res) => {
     res.json({ models });
   } catch (err) {
     res.status(502).json({ error: err instanceof Error ? err.message : "Failed to fetch OpenAI models" });
+  }
+});
+
+app.post("/api/configs/vertex-models", async (req, res) => {
+  const body = req.body as {
+    saJson?: string;
+    project?: string;
+    location?: string;
+    vertexProvider?: string;
+    anthropicApiKey?: string;
+  };
+  const gcpDefs = await detectGcpDefaults();
+  const saJson = body.saJson?.trim() || gcpDefs.serviceAccountJson || "";
+  const project = body.project?.trim() || gcpDefs.projectId || "";
+  const location = body.location?.trim() || gcpDefs.location || "us-east5";
+  const vertexProvider = body.vertexProvider?.trim() || "anthropic";
+  const anthropicApiKey = body.anthropicApiKey?.trim() || process.env.ANTHROPIC_API_KEY || "";
+  if (!saJson) {
+    res.status(400).json({ error: "GCP credentials are required" });
+    return;
+  }
+  if (!project) {
+    res.status(400).json({ error: "GCP project ID is required" });
+    return;
+  }
+  try {
+    const result = await fetchVertexModels(saJson, project, location, vertexProvider, anthropicApiKey || undefined);
+    res.json({ models: result.models, warning: result.warning });
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : "Failed to fetch Vertex models" });
   }
 });
 

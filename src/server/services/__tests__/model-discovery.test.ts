@@ -78,8 +78,8 @@ describe("model-discovery", () => {
       });
       const models = await fetchOpenaiModels("sk-test");
       expect(models).toHaveLength(2);
-      expect(models[0].id).toBe("gpt-5");
-      expect(models[1].id).toBe("gpt-5.3");
+      expect(models[0].id).toBe("gpt-5.3");
+      expect(models[1].id).toBe("gpt-5");
     });
 
     it("sends Bearer auth header", async () => {

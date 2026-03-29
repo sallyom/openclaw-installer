@@ -227,10 +227,10 @@ function deriveModel(config: DeployConfig): string {
     return normalizeModelRef(config, config.agentModel);
   }
   if (config.inferenceProvider === "anthropic") {
-    return "anthropic/claude-sonnet-4-6";
+    return `anthropic/${config.anthropicModel?.trim() || "claude-sonnet-4-6"}`;
   }
   if (config.inferenceProvider === "openai") {
-    return "openai/gpt-5.4";
+    return `openai/${config.openaiModel?.trim() || "gpt-5.4"}`;
   }
   if (config.inferenceProvider === "custom-endpoint") {
     return config.modelEndpointModel?.trim()
@@ -238,14 +238,12 @@ function deriveModel(config: DeployConfig): string {
       : `${CUSTOM_ENDPOINT_PROVIDER}/default`;
   }
   if (config.inferenceProvider === "vertex-anthropic") {
-    return shouldUseLitellmProxy(config)
-      ? `litellm/${litellmModelName(config)}`
-      : "anthropic-vertex/claude-sonnet-4-6";
+    const model = config.vertexAnthropicModel?.trim() || config.agentModel?.trim() || "claude-sonnet-4-6";
+    return shouldUseLitellmProxy(config) ? `litellm/${model}` : `anthropic-vertex/${model}`;
   }
   if (config.inferenceProvider === "vertex-google") {
-    return shouldUseLitellmProxy(config)
-      ? `litellm/${litellmModelName(config)}`
-      : "google-vertex/gemini-2.5-pro";
+    const model = config.vertexGoogleModel?.trim() || config.agentModel?.trim() || "gemini-2.5-pro";
+    return shouldUseLitellmProxy(config) ? `litellm/${model}` : `google-vertex/${model}`;
   }
   if (config.vertexEnabled && shouldUseLitellmProxy(config)) {
     return `litellm/${litellmModelName(config)}`;

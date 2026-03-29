@@ -46,48 +46,40 @@ export function litellmModelString(config: DeployConfig): string {
 function buildModelList(config: DeployConfig): Array<Record<string, unknown>> {
   const project = config.googleCloudProject || "";
   const location = config.googleCloudLocation || "";
+  const seen = new Set<string>();
 
   const models: Array<Record<string, unknown>> = [];
 
+  function addModel(name: string) {
+    if (seen.has(name)) return;
+    seen.add(name);
+    models.push({
+      model_name: name,
+      litellm_params: {
+        model: `vertex_ai/${name}`,
+        vertex_project: project,
+        vertex_location: location,
+      },
+    });
+  }
+
+  // Add the primary model (from provider-specific field, agentModel, or default)
   if (config.vertexProvider === "google") {
-    models.push(
-      {
-        model_name: "gemini-2.5-pro",
-        litellm_params: {
-          model: "vertex_ai/gemini-2.5-pro",
-          vertex_project: project,
-          vertex_location: location,
-        },
-      },
-      {
-        model_name: "gemini-2.5-flash",
-        litellm_params: {
-          model: "vertex_ai/gemini-2.5-flash",
-          vertex_project: project,
-          vertex_location: location,
-        },
-      },
-    );
+    addModel(config.vertexGoogleModel?.trim() || config.agentModel?.trim() || "gemini-2.5-pro");
+    addModel("gemini-2.5-pro");
+    addModel("gemini-2.5-flash");
+    for (const modelId of config.vertexGoogleModels || []) {
+      const trimmed = modelId.trim();
+      if (trimmed) addModel(trimmed);
+    }
   } else {
-    // Anthropic (Claude via Vertex)
-    models.push(
-      {
-        model_name: "claude-sonnet-4-6",
-        litellm_params: {
-          model: "vertex_ai/claude-sonnet-4-6",
-          vertex_project: project,
-          vertex_location: location,
-        },
-      },
-      {
-        model_name: "claude-haiku-4-5",
-        litellm_params: {
-          model: "vertex_ai/claude-haiku-4-5",
-          vertex_project: project,
-          vertex_location: location,
-        },
-      },
-    );
+    addModel(config.vertexAnthropicModel?.trim() || config.agentModel?.trim() || "claude-sonnet-4-6");
+    addModel("claude-sonnet-4-6");
+    addModel("claude-haiku-4-5");
+    for (const modelId of config.vertexAnthropicModels || []) {
+      const trimmed = modelId.trim();
+      if (trimmed) addModel(trimmed);
+    }
   }
 
   return models;

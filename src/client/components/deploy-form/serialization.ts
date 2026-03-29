@@ -56,6 +56,10 @@ export function createInitialDeployFormConfig(): DeployFormConfig {
     anthropicModels: [],
     openaiModels: [],
     agentModel: "",
+    vertexAnthropicModel: "",
+    vertexAnthropicModels: [],
+    vertexGoogleModel: "",
+    vertexGoogleModels: [],
     openaiCompatibleEndpointsEnabled: true,
     modelEndpoint: "",
     modelEndpointApiKey: "",
@@ -266,6 +270,12 @@ export function applySavedVarsToConfig(
       openaiModels:
         decodeStringArrayVar(vars, "OPENAI_MODELS_B64", "openaiModels") || prev.openaiModels,
       agentModel: getStringVar(vars, "AGENT_MODEL", "agentModel") || prev.agentModel,
+      vertexAnthropicModel: getStringVar(vars, "VERTEX_ANTHROPIC_MODEL", "vertexAnthropicModel") || prev.vertexAnthropicModel,
+      vertexAnthropicModels:
+        decodeStringArrayVar(vars, "VERTEX_ANTHROPIC_MODELS_B64", "vertexAnthropicModels") || prev.vertexAnthropicModels,
+      vertexGoogleModel: getStringVar(vars, "VERTEX_GOOGLE_MODEL", "vertexGoogleModel") || prev.vertexGoogleModel,
+      vertexGoogleModels:
+        decodeStringArrayVar(vars, "VERTEX_GOOGLE_MODELS_B64", "vertexGoogleModels") || prev.vertexGoogleModels,
       openaiCompatibleEndpointsEnabled:
         vars.OPENAI_COMPATIBLE_ENDPOINTS_ENABLED === "false"
           ? false
@@ -380,6 +390,10 @@ export function buildDeployRequestBody(params: {
     openaiModel: trimToUndefined(config.openaiModel),
     openaiModels: config.openaiModels.length > 0 ? config.openaiModels : undefined,
     agentModel: config.agentModel || undefined,
+    vertexAnthropicModel: trimToUndefined(config.vertexAnthropicModel),
+    vertexAnthropicModels: config.vertexAnthropicModels.length > 0 ? config.vertexAnthropicModels : undefined,
+    vertexGoogleModel: trimToUndefined(config.vertexGoogleModel),
+    vertexGoogleModels: config.vertexGoogleModels.length > 0 ? config.vertexGoogleModels : undefined,
     openaiCompatibleEndpointsEnabled: config.openaiCompatibleEndpointsEnabled,
     modelEndpoint: trimToUndefined(config.modelEndpoint),
     modelEndpointApiKey: trimToUndefined(config.modelEndpointApiKey),
@@ -457,6 +471,10 @@ export function buildEnvFileContent(params: {
     `MODEL_ENDPOINT_MODEL_LABEL=${config.modelEndpointModelLabel}`,
     `MODEL_ENDPOINT_MODELS_B64=${encodeBase64(JSON.stringify(config.modelEndpointModels))}`,
     `AGENT_MODEL=${config.agentModel}`,
+    `VERTEX_ANTHROPIC_MODEL=${config.vertexAnthropicModel}`,
+    `VERTEX_ANTHROPIC_MODELS_B64=${encodeBase64(JSON.stringify(config.vertexAnthropicModels))}`,
+    `VERTEX_GOOGLE_MODEL=${config.vertexGoogleModel}`,
+    `VERTEX_GOOGLE_MODELS_B64=${encodeBase64(JSON.stringify(config.vertexGoogleModels))}`,
     "",
     `VERTEX_ENABLED=${isVertex}`,
     `VERTEX_PROVIDER=${inferenceProvider === "vertex-google" ? "google" : "anthropic"}`,

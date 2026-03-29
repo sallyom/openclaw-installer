@@ -150,6 +150,18 @@ export function buildConfiguredAgentModelCatalog(
     const alias = String(option.name || "").trim() || id;
     catalog[ref] = { alias };
   }
+  for (const modelId of config.vertexAnthropicModels || []) {
+    const trimmed = modelId.trim();
+    if (!trimmed) continue;
+    const ref = shouldUseLitellmProxy(config) ? `litellm/${trimmed}` : `anthropic-vertex/${trimmed}`;
+    catalog[ref] = { alias: trimmed };
+  }
+  for (const modelId of config.vertexGoogleModels || []) {
+    const trimmed = modelId.trim();
+    if (!trimmed) continue;
+    const ref = shouldUseLitellmProxy(config) ? `litellm/${trimmed}` : `google-vertex/${trimmed}`;
+    catalog[ref] = { alias: trimmed };
+  }
   return catalog;
 }
 
@@ -164,18 +176,24 @@ function buildAgentModelConfig(config: DeployConfig, primaryModelRef: string): {
 
 export function deriveModel(config: DeployConfig): string {
   if (config.agentModel) return normalizeModelRef(config, config.agentModel);
-  if (config.inferenceProvider === "anthropic") return "anthropic/claude-sonnet-4-6";
-  if (config.inferenceProvider === "openai") return "openai/gpt-5.4";
+  if (config.inferenceProvider === "anthropic") {
+    return `anthropic/${config.anthropicModel?.trim() || "claude-sonnet-4-6"}`;
+  }
+  if (config.inferenceProvider === "openai") {
+    return `openai/${config.openaiModel?.trim() || "gpt-5.4"}`;
+  }
   if (config.inferenceProvider === "custom-endpoint") {
     return config.modelEndpointModel?.trim()
       ? normalizeModelRef(config, config.modelEndpointModel)
       : `${CUSTOM_ENDPOINT_PROVIDER}/default`;
   }
   if (config.inferenceProvider === "vertex-anthropic") {
-    return config.litellmProxy ? `litellm/${litellmModelName(config)}` : "anthropic-vertex/claude-sonnet-4-6";
+    const model = config.vertexAnthropicModel?.trim() || config.agentModel?.trim() || "claude-sonnet-4-6";
+    return config.litellmProxy ? `litellm/${model}` : `anthropic-vertex/${model}`;
   }
   if (config.inferenceProvider === "vertex-google") {
-    return config.litellmProxy ? `litellm/${litellmModelName(config)}` : "google-vertex/gemini-2.5-pro";
+    const model = config.vertexGoogleModel?.trim() || config.agentModel?.trim() || "gemini-2.5-pro";
+    return config.litellmProxy ? `litellm/${model}` : `google-vertex/${model}`;
   }
   if (config.vertexEnabled && shouldUseLitellmProxy(config)) {
     return `litellm/${litellmModelName(config)}`;
