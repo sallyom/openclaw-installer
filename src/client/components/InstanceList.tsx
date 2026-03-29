@@ -226,7 +226,10 @@ export default function InstanceList({ active }: { active: boolean }) {
   };
 
   const handleOpenWithToken = async (inst: Instance) => {
-    const targetUrl = inst.url ? `${inst.url}?session=${encodeURIComponent(defaultSessionKey(inst))}` : inst.url;
+    // Fix for #44: Add instance ID to URL so gateway can detect new instances on same port
+    const targetUrl = inst.url
+      ? `${inst.url}?session=${encodeURIComponent(defaultSessionKey(inst))}&instance=${encodeURIComponent(inst.id)}`
+      : inst.url;
     try {
       const res = await fetch(`/api/instances/${inst.id}/token`);
       const data = await res.json();
@@ -414,7 +417,7 @@ export default function InstanceList({ active }: { active: boolean }) {
                 {[
                   {
                     label: "URL",
-                    value: `${inst.url}?session=${encodeURIComponent(defaultSessionKey(inst))}#token=${encodeURIComponent(panelContent)}`,
+                    value: `${inst.url}?session=${encodeURIComponent(defaultSessionKey(inst))}&instance=${encodeURIComponent(inst.id)}#token=${encodeURIComponent(panelContent)}`,
                   },
                   { label: "Token", value: panelContent },
                 ].map(({ label, value }) => (

@@ -170,7 +170,7 @@ describe("InstanceList", () => {
       // Connection info shows both URL with token and raw token
       expect(screen.getByText("secret-token-123")).toBeInTheDocument();
       expect(
-        screen.getByText(/http:\/\/localhost:18789\?session=agent%3Auser_lynx%3Amain#token=secret-token-123/),
+        screen.getByText(/http:\/\/localhost:18789\?session=agent%3Auser_lynx%3Amain&instance=inst-1#token=secret-token-123/),
       ).toBeInTheDocument();
     });
     expect(screen.getByRole("button", { name: /^hide$/i })).toBeInTheDocument();
@@ -245,7 +245,7 @@ describe("InstanceList", () => {
     await user.click(screen.getByText("http://localhost:18789"));
     await waitFor(() => {
       expect(openSpy).toHaveBeenCalledWith(
-        "http://localhost:18789?session=agent%3Auser_lynx%3Amain#token=my-token",
+        "http://localhost:18789?session=agent%3Auser_lynx%3Amain&instance=inst-1#token=my-token",
         "_blank",
         "noopener",
       );
@@ -285,7 +285,47 @@ describe("InstanceList", () => {
     await user.click(screen.getByText("https://sam-openclaw.apps.example.com"));
     await waitFor(() => {
       expect(openSpy).toHaveBeenCalledWith(
-        "https://sam-openclaw.apps.example.com?session=agent%3Auser_lynx%3Amain#token=cluster-token",
+        "https://sam-openclaw.apps.example.com?session=agent%3Auser_lynx%3Amain&instance=k8s-1#token=cluster-token",
+        "_blank",
+        "noopener",
+      );
+    });
+  });
+
+  // Regression test for #44: instance ID should be in URL to prevent browser cache collisions
+  it("includes instance ID in gateway URL to detect new instances on same port", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimers});
+    const openSpy = vi.fn();
+    vi.stubGlobal("open", openSpy);
+
+    globalThis.fetch = vi.fn((url: string) => {
+      if (url === "/api/health") {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ k8sAvailable: false }) });
+      }
+      if (url === "/api/instances" || url === "/api/instances?includeK8s=1") {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve([runningInstance]) });
+      }
+      if (url === "/api/instances/inst-1/token") {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ token: "my-token" }) });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) });
+    }) as unknown as typeof globalThis.fetch;
+
+    render(<InstanceList active />);
+    await waitFor(() => {
+      expect(screen.getByText("http://localhost:18789")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByText("http://localhost:18789"));
+    await waitFor(() => {
+      expect(openSpy).toHaveBeenCalledWith(
+        expect.stringContaining("&instance=inst-1"),
+        "_blank",
+        "noopener",
+      );
+      // Verify full URL structure includes instance ID between session and token
+      expect(openSpy).toHaveBeenCalledWith(
+        "http://localhost:18789?session=agent%3Auser_lynx%3Amain&instance=inst-1#token=my-token",
         "_blank",
         "noopener",
       );
