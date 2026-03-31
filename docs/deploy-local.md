@@ -50,7 +50,28 @@ The installer pulls the image, provisions your agent with a default identity and
 
 ## First Browser Connect
 
-For installer-managed local containerized installs, the Control UI opens directly with the saved gateway token.
+For installer-managed local containerized installs, the Control UI opens with the saved gateway token.
+Browser device pairing remains enabled by default, so the first browser connect may still require the normal pairing/approval flow.
+
+If the browser prompts for pairing approval, go to the **Instances** tab and click **Approve Pairing** on the running instance.
+
+If you prefer to do it manually from the container instead, with podman:
+
+```bash
+podman exec -it openclaw-<prefix>-<name> openclaw devices list
+podman exec -it openclaw-<prefix>-<name> openclaw devices approve <requestId>
+```
+
+Or with docker:
+
+```bash
+docker exec -it openclaw-<prefix>-<name> openclaw devices list
+docker exec -it openclaw-<prefix>-<name> openclaw devices approve <requestId>
+```
+
+If you already have the upstream OpenClaw CLI installed on the host, you can use that instead by either exporting `OPENCLAW_CONTAINER=openclaw-<prefix>-<name>` directly or sourcing the saved per-instance `.env`.
+
+This is Control UI/browser device pairing, not channel DM pairing. You can find the local container name in the **Instances** tab.
 
 ## Secret Handling
 
@@ -69,7 +90,7 @@ for current options including Podman secrets, 1Password, and HashiCorp Vault.
 
 Installer-managed local instances save `OPENCLAW_CONTAINER` in their instance `.env`, so the upstream OpenClaw CLI can target the running local container directly.
 
-See [openclaw-cli-local.md](openclaw-cli-local.md) for the exact workflow.
+If the host does not have the upstream OpenClaw CLI installed, use `podman exec` or `docker exec` against the running container instead. See [openclaw-cli-local.md](openclaw-cli-local.md) for both workflows.
 
 ## SSH Sandbox
 
@@ -90,6 +111,8 @@ The installer runs a podman (or docker) container with:
 - Labels: `openclaw.managed=true`, `openclaw.prefix=<prefix>`, `openclaw.agent=<name>`
 - Installer-managed local state volume `openclaw-<prefix>-data` at `/home/node/.openclaw`
 - Optional read-only agent source mount at `/tmp/agent-source` when `AGENT_SOURCE_DIR` or the form field is set
+
+The installer does not disable Control UI device auth by default. This keeps the upstream browser pairing check in place for local deploys.
 
 ### Init script
 

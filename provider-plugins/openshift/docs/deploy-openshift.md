@@ -59,9 +59,7 @@ The Route URL is printed in the deploy log:
 https://openclaw-alice-myagent-openclaw.apps.your-cluster.example.com
 ```
 
-OpenShift OAuth handles the browser authentication in front of the gateway. The installer also configures the Control UI to skip browser device pairing on this OAuth-protected Route, so first connect should not require an extra pairing step.
-
-In the normal OpenShift setup here, that is not materially dangerous in practice because the Route is already protected by the OAuth proxy before traffic reaches the gateway.
+OpenShift OAuth handles browser authentication in front of the gateway, but Control UI device pairing still remains enabled. On first browser connect you may need to approve the pending pairing request from the **Instances** tab with **Approve Pairing**.
 
 Use the **Open** action from the **Instances** tab to open the Route with the saved **Gateway Token** automatically. The token is also saved to:
 

@@ -187,10 +187,6 @@ export class OpenShiftDeployer implements Deployer {
           // Set allowedOrigins to include the Route URL
           if (parsed.gateway?.controlUi) {
             parsed.gateway.controlUi.allowedOrigins = [routeUrl];
-            // OAuth proxy already authenticates end users before they reach the
-            // gateway, so skipping device pairing on this Route is not
-            // meaningfully dangerous in practice.
-            parsed.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
           }
           // NOTE: we intentionally do NOT set gateway.trustedProxies here.
           // Setting trustedProxies to ["127.0.0.1", "::1"] causes the gateway
@@ -198,9 +194,10 @@ export class OpenShiftDeployer implements Deployer {
           // for X-Forwarded-For headers that aren't there), which breaks
           // shouldAllowSilentLocalPairing and blocks subagent spawning (#69).
           // Without trustedProxies, the gateway logs a cosmetic warning about
-          // "proxy headers from untrusted address" but the Control UI still
-          // works because dangerouslyDisableDeviceAuth bypasses device auth.
-          // See ADR 0002 for full rationale.
+          // "proxy headers from untrusted address". Browser pairing stays
+          // enabled and can be approved from the Instances page. See
+          // adr/0002-remove-trustedproxies-for-subagent-pairing.md for the
+          // trustedProxies rationale.
 
           // Bind to loopback since OAuth proxy fronts the gateway
           if (parsed.gateway) {

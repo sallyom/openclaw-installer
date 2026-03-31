@@ -408,12 +408,12 @@ export function buildOpenClawConfig(config: DeployConfig, gatewayToken: string):
   const model = deriveModel(config);
   const openaiCompatibleEndpointsEnabled = config.openaiCompatibleEndpointsEnabled !== false;
   const sourceBundle = loadAgentSourceBundle(config);
+  const pluginAllowlist = Array.from(new Set<string>([
+    ...(shouldUseOtel(config) ? ["diagnostics-otel"] : []),
+    ...((config.telegramBotToken || config.telegramBotTokenRef) ? ["telegram"] : []),
+  ]));
   const controlUi: Record<string, unknown> = {
     enabled: true,
-    // Bypass first-connect browser pairing — the gateway is behind K8s
-    // network policies and token auth, so device-level auth adds friction
-    // without meaningful security benefit (fixes #69).
-    dangerouslyDisableDeviceAuth: true,
   };
   controlUi.allowedOrigins = ["http://localhost:18789"];
   const useOtel = shouldUseOtel(config);
@@ -421,7 +421,7 @@ export function buildOpenClawConfig(config: DeployConfig, gatewayToken: string):
     // Enable diagnostics-otel plugin so the gateway emits OTLP traces
     ...(useOtel ? {
       plugins: {
-        allow: ["diagnostics-otel"],
+        allow: pluginAllowlist,
         entries: { "diagnostics-otel": { enabled: true } },
       },
       diagnostics: {

@@ -1,4 +1,5 @@
 import * as k8s from "@kubernetes/client-node";
+import { Writable } from "node:stream";
 
 let _kc: k8s.KubeConfig | null = null;
 
@@ -25,6 +26,87 @@ export function coreApi(): k8s.CoreV1Api {
 
 export function appsApi(): k8s.AppsV1Api {
   return loadKubeConfig().makeApiClient(k8s.AppsV1Api);
+}
+
+export interface ExecResult {
+  stdout: string;
+  stderr: string;
+  status?: unknown;
+}
+
+export async function execInPod(
+  namespace: string,
+  podName: string,
+  containerName: string,
+  command: string[],
+): Promise<ExecResult> {
+  const kc = loadKubeConfig();
+  const exec = new k8s.Exec(kc);
+
+  let stdout = "";
+  let stderr = "";
+  let settled = false;
+
+  const stdoutStream = new Writable({
+    write(chunk, _encoding, callback) {
+      stdout += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+      callback();
+    },
+  });
+  const stderrStream = new Writable({
+    write(chunk, _encoding, callback) {
+      stderr += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+      callback();
+    },
+  });
+
+  return await new Promise<ExecResult>((resolve, reject) => {
+    void exec.exec(
+      namespace,
+      podName,
+      containerName,
+      command,
+      stdoutStream,
+      stderrStream,
+      null,
+      false,
+      (status) => {
+        if (settled) return;
+        settled = true;
+        const code = Number(
+          (status as { details?: { causes?: Array<{ reason?: string; message?: string }> } })
+            .details?.causes?.find((cause) => cause.reason === "ExitCode")?.message ?? "0",
+        );
+        if (code === 0) {
+          resolve({ stdout: stdout.trim(), stderr: stderr.trim(), status });
+          return;
+        }
+        const errorText = [stdout, stderr].filter(Boolean).join("\n").trim()
+          || `Pod exec failed with exit code ${code}`;
+        reject(Object.assign(new Error(errorText), {
+          stdout: stdout.trim(),
+          stderr: stderr.trim(),
+          status,
+          exitCode: code,
+        }));
+      },
+    ).then((ws) => {
+      ws.onclose = () => {
+        if (settled) return;
+        settled = true;
+        resolve({ stdout: stdout.trim(), stderr: stderr.trim() });
+      };
+      ws.onerror = (event) => {
+        if (settled) return;
+        settled = true;
+        reject(new Error(`Pod exec websocket error: ${String(event)}`));
+      };
+    }).catch((err) => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    });
+  });
 }
 
 /**

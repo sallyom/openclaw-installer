@@ -416,18 +416,30 @@ function buildAgentModelConfig(config: DeployConfig, primaryModelRef: string): {
     : { primary: primaryModelRef };
 }
 
+function requiredBundledPluginAllowlist(config: DeployConfig): string[] {
+  const allow = new Set<string>();
+  if (shouldUseOtel(config)) {
+    allow.add("diagnostics-otel");
+  }
+  if (config.telegramBotToken || config.telegramBotTokenRef) {
+    allow.add("telegram");
+  }
+  return Array.from(allow);
+}
+
 function buildOpenClawConfig(config: DeployConfig, gatewayToken: string): string {
   const agentId = `${config.prefix || "openclaw"}_${config.agentName}`;
   const model = deriveModel(config);
   const port = config.port ?? 18789;
   const openaiCompatibleEndpointsEnabled = config.openaiCompatibleEndpointsEnabled !== false;
   const useOtel = shouldUseOtel(config);
+  const pluginAllowlist = requiredBundledPluginAllowlist(config);
   const sourceBundle = loadAgentSourceBundle(config);
   const ocConfig: Record<string, unknown> = {
     // Enable diagnostics-otel plugin so the gateway emits OTLP traces
     ...(useOtel ? {
       plugins: {
-        allow: ["diagnostics-otel"],
+        allow: pluginAllowlist,
         entries: { "diagnostics-otel": { enabled: true } },
       },
       diagnostics: {
@@ -459,10 +471,6 @@ function buildOpenClawConfig(config: DeployConfig, gatewayToken: string): string
           `http://localhost:${port}`,
           `http://127.0.0.1:${port}`,
         ],
-        // The installer exposes the gateway only on localhost via port mapping.
-        // With a proper auth proxy in front, this bypass is not meaningfully
-        // dangerous in practice; here it avoids first-connect browser pairing.
-        dangerouslyDisableDeviceAuth: true,
       },
     },
     agents: {

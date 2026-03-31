@@ -49,7 +49,9 @@ The installer will:
 - start or reuse a managed `kubectl port-forward`
 - choose a free local port automatically
 - fetch the gateway token
-- open the UI already authenticated
+- open the UI with the saved gateway token
+
+Control UI device pairing remains enabled by default for the base Kubernetes deployer, so first browser connect may require approving the pending pairing request from the **Instances** tab with **Approve Pairing**.
 
 Manual access is still available if you prefer:
 

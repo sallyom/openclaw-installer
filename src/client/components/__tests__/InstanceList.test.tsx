@@ -93,9 +93,11 @@ describe("InstanceList", () => {
     await waitFor(() => {
       expect(screen.getByText("abc123")).toBeInTheDocument();
     });
+    expect(screen.getByText(/browser access may require a one-time device pairing/i)).toBeInTheDocument();
     expect(screen.getByText("running")).toBeInTheDocument();
     expect(screen.getByText("http://localhost:18789")).toBeInTheDocument();
     // Running instances show panel and lifecycle buttons
+    expect(screen.getByRole("button", { name: /approve pairing/i })).toBeInTheDocument();
     expect(screen.getByText("Connection Info")).toBeInTheDocument();
     expect(screen.getByText("Command")).toBeInTheDocument();
     expect(screen.getByText("Logs")).toBeInTheDocument();
@@ -143,6 +145,7 @@ describe("InstanceList", () => {
       expect(screen.getByRole("button", { name: /delete data/i })).toBeInTheDocument();
     });
     expect(screen.getByRole("button", { name: /delete data/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /approve pairing/i })).toBeInTheDocument();
   });
 
   it("toggles connection info panel on button click", async () => {
@@ -217,6 +220,76 @@ describe("InstanceList", () => {
 
     await user.click(screen.getByRole("button", { name: /re-deploy/i }));
     expect(fetchMock).toHaveBeenCalledWith("/api/instances/k8s-1/redeploy", { method: "POST" });
+  });
+
+  it("calls approve-device endpoint when Approve Pairing is clicked", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const fetchMock = mockFetchWith([runningInstance]);
+    globalThis.fetch = fetchMock;
+
+    render(<InstanceList active />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /approve pairing/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /approve pairing/i }));
+    expect(fetchMock).toHaveBeenCalledWith("/api/instances/inst-1/approve-device", { method: "POST" });
+  });
+
+  it("shows a success message after pairing approval succeeds", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    globalThis.fetch = vi.fn((url: string, opts?: RequestInit) => {
+      if (url === "/api/health") {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ k8sAvailable: false }) });
+      }
+      if ((url === "/api/instances" || url === "/api/instances?includeK8s=1") && !opts?.method) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve([runningInstance]) });
+      }
+      if (url === "/api/instances/inst-1/approve-device") {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ status: "approved" }) });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) });
+    }) as unknown as typeof globalThis.fetch;
+
+    render(<InstanceList active />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /approve pairing/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /approve pairing/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/approved the latest pending pairing request/i)).toBeInTheDocument();
+    });
+  });
+
+  it("shows a no-pending message when there is nothing to approve", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    globalThis.fetch = vi.fn((url: string, opts?: RequestInit) => {
+      if (url === "/api/health") {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ k8sAvailable: false }) });
+      }
+      if ((url === "/api/instances" || url === "/api/instances?includeK8s=1") && !opts?.method) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve([runningInstance]) });
+      }
+      if (url === "/api/instances/inst-1/approve-device") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ status: "noop", error: "No pending device pairing requests" }),
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) });
+    }) as unknown as typeof globalThis.fetch;
+
+    render(<InstanceList active />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /approve pairing/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /approve pairing/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/no pending device pairing requests/i)).toBeInTheDocument();
+    });
   });
 
   it("opens URL with token via handleOpenWithToken", async () => {

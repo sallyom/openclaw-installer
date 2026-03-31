@@ -119,9 +119,7 @@ describe("model config generation", () => {
     expect(rendered.models?.providers?.endpoint?.models).toEqual([]);
   });
 
-  // Regression test for #69: K8s config must disable device auth so the
-  // Control UI can connect without manual pairing.
-  it("disables device auth in the Control UI config", () => {
+  it("keeps device auth enabled in the Control UI config", () => {
     const config = makeConfig();
     const rendered = buildOpenClawConfig(config, "gateway-token") as {
       gateway?: {
@@ -133,7 +131,7 @@ describe("model config generation", () => {
     };
 
     expect(rendered.gateway?.controlUi?.enabled).toBe(true);
-    expect(rendered.gateway?.controlUi?.dangerouslyDisableDeviceAuth).toBe(true);
+    expect(rendered.gateway?.controlUi?.dangerouslyDisableDeviceAuth).toBeUndefined();
   });
 
   it("can disable OpenAI-compatible gateway endpoints in generated config", () => {

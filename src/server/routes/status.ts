@@ -348,6 +348,88 @@ router.post("/:id/redeploy", async (req, res) => {
   }
 });
 
+// Approve the latest pending device pairing request for a running local instance.
+router.post("/:id/approve-device", async (req, res) => {
+  const instance = await findInstance(req.params.id);
+  if (!instance) {
+    res.status(404).json({ error: "Instance not found" });
+    return;
+  }
+
+  try {
+    let stdout = "";
+    let stderr = "";
+
+    if (instance.mode === "local") {
+      const runtime = await detectRuntime();
+      if (!runtime) {
+        res.status(500).json({ error: "No container runtime" });
+        return;
+      }
+
+      const containers = await discoverContainers(runtime);
+      const c = containers.find((container) => container.name === req.params.id);
+      if (!c || c.status !== "running") {
+        res.status(400).json({ error: "Instance must be running to approve pairing" });
+        return;
+      }
+
+      const { execFile } = await import("node:child_process");
+      const { promisify } = await import("node:util");
+      const execFileAsync = promisify(execFile);
+      const result = await execFileAsync(runtime, [
+        "exec",
+        req.params.id,
+        "openclaw",
+        "devices",
+        "approve",
+        "--latest",
+      ]);
+      stdout = result.stdout.trim();
+      stderr = result.stderr.trim();
+    } else {
+      const ns = instance.config.namespace || instance.containerId || "";
+      const { coreApi, execInPod } = await import("../services/k8s.js");
+      const core = coreApi();
+      const podList = await core.listNamespacedPod({
+        namespace: ns,
+        labelSelector: "app=openclaw",
+      });
+      const pod = podList.items[0];
+      const podName = pod?.metadata?.name;
+      if (!podName) {
+        res.status(400).json({ error: "No running pod found to approve pairing" });
+        return;
+      }
+
+      const result = await execInPod(
+        ns,
+        podName,
+        "gateway",
+        ["openclaw", "devices", "approve", "--latest"],
+      );
+      stdout = result.stdout;
+      stderr = result.stderr;
+    }
+
+    res.json({
+      status: "approved",
+      output: [stdout, stderr].filter(Boolean).join("").trim(),
+    });
+  } catch (err) {
+    const execError = err as Error & { stdout?: string; stderr?: string };
+    const details = [execError.stdout, execError.stderr, execError.message].filter(Boolean).join("\n").trim();
+    if (/\b(no|none|not)\b.*\b(pending|request|approval)\b/i.test(details)) {
+      res.json({
+        status: "noop",
+        error: "No pending device pairing requests",
+      });
+      return;
+    }
+    res.status(500).json({ error: details || "Failed to approve device pairing" });
+  }
+});
+
 // Get gateway token from running container or K8s secret
 router.get("/:id/token", async (req, res) => {
   // Check if this is a K8s instance
