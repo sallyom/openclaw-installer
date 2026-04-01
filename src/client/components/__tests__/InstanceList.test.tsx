@@ -207,6 +207,56 @@ describe("InstanceList", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/instances/inst-1/stop", { method: "POST" });
   });
 
+  it("clears stale pairing message after stopping an instance", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const openSpy = vi.fn();
+    vi.stubGlobal("open", openSpy);
+
+    let instances = [runningInstance];
+    globalThis.fetch = vi.fn((url: string, opts?: RequestInit) => {
+      if (url === "/api/health") {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ k8sAvailable: false }) });
+      }
+      if ((url === "/api/instances" || url === "/api/instances?includeK8s=1") && !opts?.method) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(instances) });
+      }
+      if (url === "/api/instances/inst-1/token") {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ token: "my-token" }) });
+      }
+      if (url === "/api/instances/inst-1/approve-device") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ status: "noop", error: "No pending device pairing requests" }),
+        });
+      }
+      if (url === "/api/instances/inst-1/stop") {
+        instances = [{ ...runningInstance, status: "stopped", url: undefined }];
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) });
+    }) as unknown as typeof globalThis.fetch;
+
+    render(<InstanceList active />);
+    await waitFor(() => {
+      expect(screen.getByText("http://localhost:18789")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByText("http://localhost:18789"));
+    await vi.advanceTimersByTimeAsync(15000);
+
+    await waitFor(() => {
+      expect(screen.getByText(/opened the gateway, but no pairing request appeared yet/i)).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /stop/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByText(/opened the gateway, but no pairing request appeared yet/i)).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /start/i })).toBeInTheDocument();
+    });
+  });
+
   it("calls redeploy endpoint when Re-deploy is clicked", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const runningK8s = { ...runningInstance, mode: "kubernetes", id: "k8s-1" };
@@ -307,6 +357,9 @@ describe("InstanceList", () => {
       if (url === "/api/instances/inst-1/token") {
         return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ token: "my-token" }) });
       }
+      if (url === "/api/instances/inst-1/approve-device") {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ status: "approved" }) });
+      }
       return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) });
     }) as unknown as typeof globalThis.fetch;
 
@@ -322,6 +375,9 @@ describe("InstanceList", () => {
         "_blank",
         "noopener",
       );
+    });
+    await waitFor(() => {
+      expect(screen.getByText(/opened the gateway and approved the pending pairing request/i)).toBeInTheDocument();
     });
   });
 
@@ -347,6 +403,9 @@ describe("InstanceList", () => {
       if (url === "/api/instances/k8s-1/token") {
         return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ token: "cluster-token" }) });
       }
+      if (url === "/api/instances/k8s-1/approve-device") {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ status: "approved" }) });
+      }
       return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) });
     }) as unknown as typeof globalThis.fetch;
 
@@ -363,6 +422,57 @@ describe("InstanceList", () => {
         "noopener",
       );
     });
+  });
+
+  it("polls pairing approval after opening the gateway URL until a pending request appears", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const openSpy = vi.fn();
+    vi.stubGlobal("open", openSpy);
+
+    let approveCalls = 0;
+    globalThis.fetch = vi.fn((url: string, opts?: RequestInit) => {
+      if (url === "/api/health") {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ k8sAvailable: false }) });
+      }
+      if ((url === "/api/instances" || url === "/api/instances?includeK8s=1") && !opts?.method) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve([runningInstance]) });
+      }
+      if (url === "/api/instances/inst-1/token") {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ token: "my-token" }) });
+      }
+      if (url === "/api/instances/inst-1/approve-device") {
+        approveCalls += 1;
+        if (approveCalls < 3) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ status: "noop", error: "No pending device pairing requests" }),
+          });
+        }
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ status: "approved" }) });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) });
+    }) as unknown as typeof globalThis.fetch;
+
+    render(<InstanceList active />);
+    await waitFor(() => {
+      expect(screen.getByText("http://localhost:18789")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByText("http://localhost:18789"));
+    expect(screen.getByText(/waiting for the browser pairing request/i)).toBeInTheDocument();
+
+    await vi.advanceTimersByTimeAsync(2000);
+
+    await waitFor(() => {
+      expect(openSpy).toHaveBeenCalledWith(
+        "http://localhost:18789?session=agent%3Auser_lynx%3Amain#token=my-token",
+        "_blank",
+        "noopener",
+      );
+      expect(screen.getByText(/opened the gateway and approved the pending pairing request/i)).toBeInTheDocument();
+    });
+    expect(approveCalls).toBe(3);
   });
 
   it("calls DELETE endpoint on confirmed delete", async () => {

@@ -31,6 +31,14 @@ interface Instance {
 }
 
 type ExpandedPanel = "connection" | "command" | "logs" | null;
+type PairingMessage = { tone: "success" | "warning" | "error" | "info"; text: string };
+type ApproveDeviceResult =
+  | { kind: "approved" }
+  | { kind: "noop"; message: string }
+  | { kind: "error"; message: string };
+
+const AUTO_APPROVE_ATTEMPTS = 15;
+const AUTO_APPROVE_INTERVAL_MS = 1000;
 
 function defaultSessionKey(inst: Instance): string {
   const prefix = inst.config.prefix?.trim() || "openclaw";
@@ -107,7 +115,15 @@ export default function InstanceList({ active }: { active: boolean }) {
   const [acting, setActing] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, ExpandedPanel>>({});
   const [panelData, setPanelData] = useState<Record<string, string>>({});
-  const [pairingMessages, setPairingMessages] = useState<Record<string, { tone: "success" | "warning" | "error"; text: string }>>({});
+  const [pairingMessages, setPairingMessages] = useState<Record<string, PairingMessage>>({});
+
+  const clearPairingMessage = (id: string) => {
+    setPairingMessages((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  };
 
   const fetchInstances = async () => {
     try {
@@ -118,6 +134,30 @@ export default function InstanceList({ active }: { active: boolean }) {
       }
       const data = await res.json();
       setInstances(data);
+      setPairingMessages((prev) => {
+        const runningIds = new Set(
+          Array.isArray(data)
+            ? data
+                .filter(
+                  (inst): inst is Instance =>
+                    typeof inst === "object" &&
+                    inst !== null &&
+                    "id" in inst &&
+                    "status" in inst &&
+                    typeof (inst as Instance).id === "string" &&
+                    (inst as Instance).status === "running",
+                )
+                .map((inst) => inst.id)
+            : [],
+        );
+        const next: Record<string, PairingMessage> = {};
+        for (const [id, message] of Object.entries(prev)) {
+          if (runningIds.has(id)) {
+            next[id] = message;
+          }
+        }
+        return next;
+      });
       setError(null);
     } catch (err) {
       setInstances([]);
@@ -154,6 +194,7 @@ export default function InstanceList({ active }: { active: boolean }) {
 
   const handleStart = async (id: string) => {
     setActing(id);
+    clearPairingMessage(id);
     await fetch(`/api/instances/${id}/start`, { method: "POST" });
     await fetchInstances();
     setActing(null);
@@ -161,6 +202,7 @@ export default function InstanceList({ active }: { active: boolean }) {
 
   const handleStop = async (id: string) => {
     setActing(id);
+    clearPairingMessage(id);
     await fetch(`/api/instances/${id}/stop`, { method: "POST" });
     setExpanded((prev) => {
       const next = { ...prev };
@@ -173,54 +215,58 @@ export default function InstanceList({ active }: { active: boolean }) {
 
   const handleRedeploy = async (id: string) => {
     setActing(id);
+    clearPairingMessage(id);
     await fetch(`/api/instances/${id}/redeploy`, { method: "POST" });
     await fetchInstances();
     setActing(null);
   };
 
-  const handleApproveDevice = async (id: string) => {
-    setActing(id);
-    setPairingMessages((prev) => {
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
+  const setPairingMessage = (id: string, message: PairingMessage) => {
+    setPairingMessages((prev) => ({
+      ...prev,
+      [id]: message,
+    }));
+  };
+
+  const approveDevice = async (id: string): Promise<ApproveDeviceResult> => {
     try {
       const res = await fetch(`/api/instances/${id}/approve-device`, { method: "POST" });
       const data = await res.json();
       if (res.ok && data.status === "noop") {
-        setPairingMessages((prev) => ({
-          ...prev,
-          [id]: {
-            tone: "warning",
-            text: data.error || "No pending device pairing requests.",
-          },
-        }));
-      } else if (res.ok) {
-        setPairingMessages((prev) => ({
-          ...prev,
-          [id]: {
-            tone: "success",
-            text: "Approved the latest pending pairing request.",
-          },
-        }));
-      } else {
-        setPairingMessages((prev) => ({
-          ...prev,
-          [id]: {
-            tone: "error",
-            text: data.error || `Failed to approve pairing (${res.status})`,
-          },
-        }));
+        return {
+          kind: "noop",
+          message: data.error || "No pending device pairing requests.",
+        };
       }
+      if (res.ok) {
+        return { kind: "approved" };
+      }
+      return {
+        kind: "error",
+        message: data.error || `Failed to approve pairing (${res.status})`,
+      };
     } catch (err) {
-      setPairingMessages((prev) => ({
-        ...prev,
-        [id]: {
-          tone: "error",
-          text: err instanceof Error ? err.message : "Failed to approve pairing",
-        },
-      }));
+      return {
+        kind: "error",
+        message: err instanceof Error ? err.message : "Failed to approve pairing",
+      };
+    }
+  };
+
+  const handleApproveDevice = async (id: string) => {
+    setActing(id);
+    clearPairingMessage(id);
+    const result = await approveDevice(id);
+    if (result.kind === "approved") {
+      setPairingMessage(id, {
+        tone: "success",
+        text: "Approved the latest pending pairing request.",
+      });
+    } else {
+      setPairingMessage(id, {
+        tone: result.kind === "noop" ? "warning" : "error",
+        text: result.message,
+      });
     }
     await fetchInstances();
     setActing(null);
@@ -274,8 +320,14 @@ export default function InstanceList({ active }: { active: boolean }) {
     navigator.clipboard.writeText(text);
   };
 
+  const sleep = async (ms: number) =>
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, ms);
+    });
+
   const handleOpenWithToken = async (inst: Instance) => {
     const targetUrl = inst.url ? `${inst.url}?session=${encodeURIComponent(defaultSessionKey(inst))}` : inst.url;
+    clearPairingMessage(inst.id);
     try {
       const res = await fetch(`/api/instances/${inst.id}/token`);
       const data = await res.json();
@@ -285,6 +337,41 @@ export default function InstanceList({ active }: { active: boolean }) {
     } catch {
       // Fall back to opening without token
       window.open(targetUrl, "_blank", "noopener");
+    }
+
+    setActing(inst.id);
+    setPairingMessage(inst.id, {
+      tone: "info",
+      text: "Opened the gateway and waiting for the browser pairing request...",
+    });
+    try {
+      for (let attempt = 0; attempt < AUTO_APPROVE_ATTEMPTS; attempt += 1) {
+        const result = await approveDevice(inst.id);
+        if (result.kind === "approved") {
+          setPairingMessage(inst.id, {
+            tone: "success",
+            text: "Opened the gateway and approved the pending pairing request.",
+          });
+          return;
+        }
+        if (result.kind === "error") {
+          setPairingMessage(inst.id, {
+            tone: "error",
+            text: result.message,
+          });
+          return;
+        }
+        if (attempt < AUTO_APPROVE_ATTEMPTS - 1) {
+          await sleep(AUTO_APPROVE_INTERVAL_MS);
+        }
+      }
+      setPairingMessage(inst.id, {
+        tone: "warning",
+        text: "Opened the gateway, but no pairing request appeared yet. If the Control UI is still loading, try Approve Pairing again.",
+      });
+    } finally {
+      await fetchInstances();
+      setActing(null);
     }
   };
 
@@ -333,7 +420,7 @@ export default function InstanceList({ active }: { active: boolean }) {
           fontSize: "0.9rem",
         }}
       >
-        Browser access may require a one-time device pairing. If the Control UI asks to pair, use
+        Browser access may require a one-time device pairing. Opening the gateway will try to auto-approve it. If the request is still pending, use
         {" "}
         <strong>Approve Pairing</strong>
         {" "}
@@ -482,6 +569,8 @@ export default function InstanceList({ active }: { active: boolean }) {
                   color:
                     pairingMessage.tone === "success"
                       ? "#1f7a3d"
+                      : pairingMessage.tone === "info"
+                        ? "var(--text-secondary)"
                       : pairingMessage.tone === "warning"
                         ? "#9a6700"
                         : "#e74c3c",
