@@ -144,7 +144,7 @@ registered as additional agents through `openclaw-agents.json`.
 
 The `software-qa-mcp` demo includes:
 
-- `mcp.json` for DeepWiki and Context7 MCP servers
+- `mcp.json` for the Context7 MCP server
 - `exec-approvals.json` for baseline tool approval policy
 - `workspace-main/` with a software Q&A agent persona
 

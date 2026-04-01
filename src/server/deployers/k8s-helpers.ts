@@ -513,7 +513,7 @@ export function buildOpenClawConfig(config: DeployConfig, gatewayToken: string):
 
   const mcpServers = loadAgentSourceMcpServers(config.agentSourceDir);
   if (mcpServers) {
-    ocConfig.mcpServers = mcpServers;
+    ocConfig.mcp = { servers: mcpServers };
   }
 
   attachSecretHandlingConfig(ocConfig, config);

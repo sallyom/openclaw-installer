@@ -642,7 +642,7 @@ describe("MCP servers from agent source", () => {
     }
   });
 
-  it("includes mcpServers when mcp.json exists in agent source dir", () => {
+  it("includes mcp.servers when mcp.json exists in agent source dir", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-k8s-mcp-"));
     tempDirs.push(dir);
     writeFileSync(
@@ -653,32 +653,32 @@ describe("MCP servers from agent source", () => {
 
     const config = makeConfig({ agentSourceDir: dir });
     const rendered = buildOpenClawConfig(config, "gateway-token") as {
-      mcpServers?: Record<string, unknown>;
+      mcp?: { servers?: Record<string, unknown> };
     };
 
-    expect(rendered.mcpServers).toEqual({
+    expect(rendered.mcp?.servers).toEqual({
       myserver: { url: "https://mcp.example.com" },
     });
   });
 
-  it("omits mcpServers when no mcp.json in agent source dir", () => {
+  it("omits mcp when no mcp.json in agent source dir", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-k8s-mcp-"));
     tempDirs.push(dir);
 
     const config = makeConfig({ agentSourceDir: dir });
     const rendered = buildOpenClawConfig(config, "gateway-token") as {
-      mcpServers?: Record<string, unknown>;
+      mcp?: { servers?: Record<string, unknown> };
     };
 
-    expect(rendered.mcpServers).toBeUndefined();
+    expect(rendered.mcp).toBeUndefined();
   });
 
-  it("omits mcpServers when agentSourceDir is not set", () => {
+  it("omits mcp when agentSourceDir is not set", () => {
     const config = makeConfig();
     const rendered = buildOpenClawConfig(config, "gateway-token") as {
-      mcpServers?: Record<string, unknown>;
+      mcp?: { servers?: Record<string, unknown> };
     };
 
-    expect(rendered.mcpServers).toBeUndefined();
+    expect(rendered.mcp).toBeUndefined();
   });
 });

@@ -278,8 +278,6 @@ export async function fetchVertexModels(
       );
 
       const verified = probeResults.filter((r) => r.works).map((r) => r.model);
-      const failed = probeResults.filter((r) => !r.works).map((r) => r.model.id);
-      console.log(`Vertex model probing: ${anthropicModels.length} from Anthropic API, ${verified.length} verified, ${failed.length} failed${failed.length > 0 ? ` (${failed.join(", ")})` : ""}`);
 
       if (verified.length > 0) {
         return { models: verified };

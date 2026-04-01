@@ -1,7 +1,7 @@
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { v4 as uuid } from "uuid";
 import type {
@@ -181,7 +181,7 @@ function tryParseProjectId(saJson: string): string {
 
 function normalizeHostPath(value?: string): string | undefined {
   const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+  return trimmed ? resolve(trimmed) : undefined;
 }
 
 function resolveOptionalTextFile(filePath?: string): string | undefined {
@@ -550,7 +550,7 @@ function buildOpenClawConfig(config: DeployConfig, gatewayToken: string): string
 
   const mcpServers = loadAgentSourceMcpServers(config.agentSourceDir);
   if (mcpServers) {
-    ocConfig.mcpServers = mcpServers;
+    ocConfig.mcp = { servers: mcpServers };
   }
 
   attachSecretHandlingConfig(ocConfig, config);
