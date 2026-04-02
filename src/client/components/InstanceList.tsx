@@ -17,6 +17,7 @@ interface Instance {
   id: string;
   mode: string;
   status: string;
+  hasLocalState?: boolean;
   config: {
     prefix: string;
     agentName: string;
@@ -103,6 +104,24 @@ function K8sProgress({ inst }: { inst: Instance }) {
           {pod.message}
         </div>
       )}
+    </div>
+  );
+}
+
+function RemoteClusterNotice({ namespace }: { namespace: string }) {
+  return (
+    <div
+      style={{
+        padding: "0.5rem 1rem",
+        borderTop: "1px solid var(--border)",
+        color: "var(--text-secondary)",
+        fontSize: "0.85rem",
+      }}
+    >
+      Cluster-discovered only. No matching local installer state was found for
+      {" "}
+      <code style={{ fontFamily: "var(--font-mono)" }}>{namespace}</code>
+      .
     </div>
   );
 }
@@ -436,6 +455,8 @@ export default function InstanceList({ active }: { active: boolean }) {
         const isDeploying = inst.status === "deploying";
         const isError = inst.status === "error";
         const isK8s = inst.mode !== "local";
+        const isRemoteClusterInstance = isK8s && inst.hasLocalState === false;
+        const canUseLocalManagedActions = !isRemoteClusterInstance;
         const canStop = isRunning || isDeploying || isError;
         // K8s: allow delete anytime (it deletes the whole namespace)
         // Local: must stop first
@@ -460,7 +481,7 @@ export default function InstanceList({ active }: { active: boolean }) {
                 <div className="instance-meta">
                   {inst.config.prefix && `${inst.config.prefix} · `}
                   {inst.config.agentName && `${inst.config.agentName} · `}
-                  {isRunning && inst.url ? (
+                  {isRunning && inst.url && canUseLocalManagedActions ? (
                     <a
                       href={inst.url}
                       target="_blank"
@@ -473,6 +494,8 @@ export default function InstanceList({ active }: { active: boolean }) {
                     >
                       {inst.url}
                     </a>
+                  ) : isRunning && isRemoteClusterInstance ? (
+                    "running on shared cluster"
                   ) : isDeploying ? (
                     "deploying..."
                   ) : isError ? (
@@ -487,20 +510,24 @@ export default function InstanceList({ active }: { active: boolean }) {
               <div className="instance-actions">
                 {isRunning && (
                   <>
-                    <button
-                      className="btn btn-ghost"
-                      disabled={isActing}
-                      onClick={() => handleApproveDevice(inst.id)}
-                      title="Approve the latest pending browser device pairing request"
-                    >
-                      Approve Pairing
-                    </button>
-                    <button
-                      className="btn btn-ghost"
-                      onClick={() => togglePanel(inst.id, "connection")}
-                    >
-                      {activePanel === "connection" ? "Hide" : "Connection Info"}
-                    </button>
+                    {canUseLocalManagedActions && (
+                      <>
+                        <button
+                          className="btn btn-ghost"
+                          disabled={isActing}
+                          onClick={() => handleApproveDevice(inst.id)}
+                          title="Approve the latest pending browser device pairing request"
+                        >
+                          Approve Pairing
+                        </button>
+                        <button
+                          className="btn btn-ghost"
+                          onClick={() => togglePanel(inst.id, "connection")}
+                        >
+                          {activePanel === "connection" ? "Hide" : "Connection Info"}
+                        </button>
+                      </>
+                    )}
                     <button
                       className="btn btn-ghost"
                       onClick={() => togglePanel(inst.id, "command")}
@@ -515,7 +542,7 @@ export default function InstanceList({ active }: { active: boolean }) {
                     </button>
                   </>
                 )}
-                {isK8s && (isRunning || isDeploying || isError) && (
+                {isK8s && canUseLocalManagedActions && (isRunning || isDeploying || isError) && (
                   <button
                     className="btn btn-ghost"
                     disabled={isActing}
@@ -579,6 +606,9 @@ export default function InstanceList({ active }: { active: boolean }) {
               >
                 {pairingMessage.text}
               </div>
+            )}
+            {isRemoteClusterInstance && (
+              <RemoteClusterNotice namespace={inst.id} />
             )}
             <K8sProgress inst={inst} />
             {activePanel === "connection" && panelContent && inst.url && (

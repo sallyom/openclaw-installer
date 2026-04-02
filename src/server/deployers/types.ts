@@ -121,6 +121,7 @@ export interface DeployResult {
   status: "running" | "stopped" | "failed" | "deploying" | "error" | "unknown";
   config: DeployConfig;
   startedAt: string;
+  hasLocalState?: boolean;
   url?: string;
   containerId?: string;
   volumeName?: string;

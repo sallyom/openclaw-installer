@@ -41,6 +41,7 @@ function containerToInstance(c: DiscoveredContainer): DeployResult {
     id: c.name,
     mode: "local",
     status: c.status,
+    hasLocalState: true,
     config: {
       mode: "local",
       prefix: prefix || c.name.replace(/^openclaw-/, "").replace(/-[^-]+$/, ""),
@@ -113,6 +114,7 @@ router.get("/", async (req, res) => {
             id: vol.containerName,
             mode: "local",
             status: "stopped",
+            hasLocalState: true,
             volumeName: vol.name,
             config: {
               mode: "local",
@@ -203,11 +205,13 @@ router.get("/", async (req, res) => {
       try {
         const k8sInstances = await discoverK8sInstances();
         for (const ki of k8sInstances) {
-          const mode = await savedDeployMode(ki.namespace);
+          const savedState = await readSavedK8sState(ki.namespace);
+          const mode = savedState.mode;
           let instance: DeployResult = {
             id: ki.namespace,
             mode,
             status: ki.status,
+            hasLocalState: savedState.hasLocalState,
             config: {
               mode,
               prefix: ki.prefix,
@@ -226,7 +230,7 @@ router.get("/", async (req, res) => {
           };
 
           // Let the deployer enrich with platform-specific info (e.g. Route URL)
-          const deployer = registry.get(mode);
+          const deployer = savedState.hasLocalState ? registry.get(mode) : undefined;
           if (deployer && typeof deployer.status === "function") {
             try {
               instance = await deployer.status(instance);
@@ -793,17 +797,23 @@ async function readSavedGatewayToken(containerName: string): Promise<string | un
 
 
 /**
- * Read the saved deploy-config.json for a K8s namespace to get the actual deploy mode.
- * Returns "kubernetes" as fallback if no saved config exists.
+ * Read saved installer state for a K8s namespace on this machine.
+ * Falls back to generic Kubernetes when no local state exists.
  */
-async function savedDeployMode(namespace: string): Promise<string> {
+async function readSavedK8sState(namespace: string): Promise<{ hasLocalState: boolean; mode: string }> {
   try {
     const configPath = join(installerDataDir(), "k8s", namespace, "deploy-config.json");
     const content = await readFile(configPath, "utf8");
     const config = JSON.parse(content);
-    return config.mode || "kubernetes";
+    return {
+      hasLocalState: true,
+      mode: config.mode || "kubernetes",
+    };
   } catch {
-    return "kubernetes";
+    return {
+      hasLocalState: false,
+      mode: "kubernetes",
+    };
   }
 }
 
@@ -827,6 +837,7 @@ async function findInstance(name: string): Promise<DeployResult | null> {
         id: name,
         mode: "local",
         status: "stopped",
+        hasLocalState: true,
         volumeName: vol.name,
         config: {
           mode: "local",
@@ -930,11 +941,13 @@ async function findInstance(name: string): Promise<DeployResult | null> {
   const k8sInstances = await discoverK8sInstances({ namespaces: [name] });
   const ki = k8sInstances.find((i) => i.namespace === name);
   if (ki) {
-    const mode = await savedDeployMode(ki.namespace);
+    const savedState = await readSavedK8sState(ki.namespace);
+    const mode = savedState.mode;
     let instance: DeployResult = {
       id: ki.namespace,
       mode,
       status: ki.status,
+      hasLocalState: savedState.hasLocalState,
       config: {
         mode,
         prefix: ki.prefix,
@@ -952,7 +965,7 @@ async function findInstance(name: string): Promise<DeployResult | null> {
       pods: ki.pods,
     };
 
-    const deployer = registry.get(mode);
+    const deployer = savedState.hasLocalState ? registry.get(mode) : undefined;
     if (deployer && typeof deployer.status === "function") {
       try {
         instance = await deployer.status(instance);

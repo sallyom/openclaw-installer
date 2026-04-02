@@ -41,6 +41,15 @@ const errorK8sInstance = {
   pods: [{ name: "owl-pod", phase: "Running", ready: false, restarts: 5, containerStatus: "waiting", message: "Back-off restarting failed container" }],
 };
 
+const remoteK8sInstance = {
+  id: "shared-bob-openclaw",
+  mode: "kubernetes",
+  status: "running",
+  hasLocalState: false,
+  config: { prefix: "shared", agentName: "bob", agentDisplayName: "Bob" },
+  startedAt: "2025-01-01T00:00:00Z",
+};
+
 function mockFetchWith(instances: unknown[]) {
   return vi.fn((url: string, opts?: RequestInit) => {
     if (url === "/api/health") {
@@ -135,6 +144,21 @@ describe("InstanceList", () => {
     });
     expect(screen.getByText("Restarts: 5")).toBeInTheDocument();
     expect(screen.getByText("Back-off restarting failed container")).toBeInTheDocument();
+  });
+
+  it("renders cluster-discovered K8s instances without local-managed actions", async () => {
+    globalThis.fetch = mockFetchWith([remoteK8sInstance]);
+    render(<InstanceList active />);
+    await waitFor(() => {
+      expect(screen.getByText(/cluster-discovered only/i)).toBeInTheDocument();
+    });
+    expect(screen.getByText((text) => text.includes("running on shared cluster"))).toBeInTheDocument();
+    expect(screen.getByText("Command")).toBeInTheDocument();
+    expect(screen.getByText("Logs")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /approve pairing/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /connection info/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /re-deploy/i })).not.toBeInTheDocument();
+    expect(screen.queryByText("http://localhost:18789")).not.toBeInTheDocument();
   });
 
   it("enables Delete Data for running K8s instance", async () => {
