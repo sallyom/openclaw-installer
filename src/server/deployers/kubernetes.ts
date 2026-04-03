@@ -13,12 +13,13 @@ import type {
   DeployResult,
   LogCallback,
 } from "./types.js";
-import { namespaceName, agentId, deriveModel, detectUnavailableProvider, generateToken, usesDefaultEnvSecretRef } from "./k8s-helpers.js";
+import { namespaceName, deriveModel, detectUnavailableProvider, generateToken, usesDefaultEnvSecretRef } from "./k8s-helpers.js";
 import { loadWorkspaceFiles } from "./k8s-agent.js";
-import { loadAgentSourceBundle, loadAgentSourceCronJobs, loadAgentSourceExecApprovals, loadAgentSourceWorkspaceTree, mainWorkspaceShellCondition } from "./agent-source.js";
+import { loadAgentSourceBundle, loadAgentSourceCronJobs, loadAgentSourceExecApprovals, loadAgentSourceWorkspaceTree } from "./agent-source.js";
 import {
   namespaceManifest,
   pvcManifest,
+  serviceAccountManifest,
   configMapManifest,
   agentConfigMapManifest,
   fileTreeConfigMapManifest,
@@ -28,6 +29,7 @@ import {
   otelConfigMapManifest,
   secretManifest,
   serviceManifest,
+  buildInitScript,
   deploymentManifest,
 } from "./k8s-manifests.js";
 import {
@@ -46,6 +48,7 @@ import {
 } from "./k8s-a2a.js";
 import { shouldUseLitellmProxy, generateLitellmMasterKey, generateLitellmConfig } from "./litellm.js";
 import { shouldUseOtel, generateOtelConfig, generateOtelConfigObject } from "./otel.js";
+import { OPENCLAW_SERVICE_ACCOUNT_NAME } from "./vault-helper.js";
 
 // Re-export discovery for consumers
 export type { K8sPodInfo, K8sInstance } from "./k8s-discovery.js";
@@ -158,6 +161,17 @@ export class KubernetesDeployer implements Deployer {
           log,
         );
       }
+    }
+
+    if (!config.withA2a) {
+      const sa = serviceAccountManifest(ns);
+      await applyResource(
+        () => core.readNamespacedServiceAccount({ name: OPENCLAW_SERVICE_ACCOUNT_NAME, namespace: ns }),
+        () => core.createNamespacedServiceAccount({ namespace: ns, body: sa }),
+        () => core.replaceNamespacedServiceAccount({ name: OPENCLAW_SERVICE_ACCOUNT_NAME, namespace: ns, body: sa }),
+        `ServiceAccount ${OPENCLAW_SERVICE_ACCOUNT_NAME}`,
+        log,
+      );
     }
 
     if (config.withA2a) {
@@ -608,31 +622,7 @@ export class KubernetesDeployer implements Deployer {
 
     // Update the init container script to always copy agent files (removes
     // the "if not exists" guard from older deploys) and restart the pod
-    const id = agentId(result.config);
-    const agentFiles = ["AGENTS.md", "agent.json", "SOUL.md", "IDENTITY.md", "TOOLS.md", "USER.md", "HEARTBEAT.md", "MEMORY.md"];
-    const copyLines = agentFiles
-      .map((f) => `cp /agents/${f} /home/node/.openclaw/workspace-${id}/${f} 2>/dev/null || true`)
-      .join("\n");
-
-    // Fix for #62: use bundle-aware routing so persona-named workspaces map to the main agent
-    const mainWorkspaceDest = `/home/node/.openclaw/workspace-${id}`;
-    const workspaceRouting = mainWorkspaceShellCondition(mainWorkspaceDest, loadAgentSourceBundle(result.config));
-
-    const initScript = `
-cp /config/openclaw.json /home/node/.openclaw/openclaw.json
-chmod 644 /home/node/.openclaw/openclaw.json
-mkdir -p /home/node/.openclaw/workspace
-mkdir -p /home/node/.openclaw/skills
-mkdir -p /home/node/.openclaw/cron
-mkdir -p /home/node/.openclaw/workspace-${id}
-${copyLines}
-find -L /agents-tree -mindepth 1 -type d -name 'workspace-*' -exec sh -c 'base="$(basename "$1")"; ${workspaceRouting}; mkdir -p "$dest"; cp -r "$1"/* "$dest"/ 2>/dev/null || true' _ {} \\;
-cp -r /skills-src/. /home/node/.openclaw/skills/ 2>/dev/null || true
-cp /cron-src/jobs.json /home/node/.openclaw/cron/jobs.json 2>/dev/null || true
-chgrp -R 0 /home/node/.openclaw 2>/dev/null || true
-chmod -R g=u /home/node/.openclaw 2>/dev/null || true
-echo "Config initialized"
-`.trim();
+    const initScript = buildInitScript(result.config);
 
     // Use JSON Patch to update the init container command and restart annotation
     const patches = [
@@ -695,6 +685,7 @@ echo "Config initialized"
     const deletes: Array<{ name: string; fn: () => Promise<unknown> }> = [
       { name: "Deployment", fn: () => apps.deleteNamespacedDeployment({ name: "openclaw", namespace: ns }) },
       { name: "Service", fn: () => core.deleteNamespacedService({ name: "openclaw", namespace: ns }) },
+      { name: `ServiceAccount ${OPENCLAW_SERVICE_ACCOUNT_NAME}`, fn: () => core.deleteNamespacedServiceAccount({ name: OPENCLAW_SERVICE_ACCOUNT_NAME, namespace: ns }) },
       { name: "ServiceAccount openclaw-oauth-proxy", fn: () => core.deleteNamespacedServiceAccount({ name: "openclaw-oauth-proxy", namespace: ns }) },
       { name: "Secret openclaw-secrets", fn: () => core.deleteNamespacedSecret({ name: "openclaw-secrets", namespace: ns }) },
       { name: "Secret gcp-sa", fn: () => core.deleteNamespacedSecret({ name: "gcp-sa", namespace: ns }) },

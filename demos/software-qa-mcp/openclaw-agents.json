@@ -1,0 +1,17 @@
+{
+  "mainAgent": {
+    "subagents": {
+      "allowAgents": ["docs-checker"]
+    }
+  },
+  "agents": [
+    {
+      "id": "docs-checker",
+      "name": "Docs Checker",
+      "model": {
+        "primary": "anthropic/claude-sonnet-4-6",
+        "fallbacks": ["openai/gpt-5.4"]
+      }
+    }
+  ]
+}

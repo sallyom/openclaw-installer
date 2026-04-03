@@ -486,7 +486,9 @@ function buildOpenClawConfig(config: DeployConfig, gatewayToken: string): string
           name: config.agentDisplayName || config.agentName,
           identity: { name: config.agentDisplayName || config.agentName },
           workspace: `~/.openclaw/workspace-${agentId}`,
-          model: buildAgentModelConfig(config, model),
+          model: sourceBundle?.mainAgent?.model
+            ? resolveSubagentModel(sourceBundle.mainAgent.model, model)
+            : buildAgentModelConfig(config, model),
           subagents: sourceBundle?.mainAgent?.subagents || subagentConfig(config.subagentPolicy),
           ...(sourceBundle?.mainAgent?.tools ? { tools: sourceBundle.mainAgent.tools } : {}),
         },

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  buildManagedAgentAuthProfiles,
   buildOpenClawConfig,
   deriveModel,
   detectUnavailableProvider,
@@ -104,6 +105,46 @@ describe("model config generation", () => {
       "openai/gpt-5.4": { alias: "gpt-5.4" },
       "endpoint/mistral-small-24b-w8a8": { alias: "Mistral Small 24B" },
     });
+  });
+
+  it("applies mainAgent bundle fallbacks even when the bundle does not override primary", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-main-agent-bundle-"));
+    writeFileSync(
+      join(dir, "openclaw-agents.json"),
+      JSON.stringify({
+        mainAgent: {
+          model: {
+            fallbacks: ["endpoint/google/gemma-4-26B-A4B-it"],
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const config = makeConfig({
+      mode: "local",
+      inferenceProvider: "anthropic",
+      anthropicApiKey: "test-key",
+      modelEndpoint: "http://100.76.40.32:8000/v1",
+      modelEndpointModel: "google/gemma-4-26B-A4B-it",
+      modelEndpointModelLabel: "Gemma 4 26B",
+      agentSourceDir: dir,
+    });
+
+    const rendered = buildOpenClawConfig(config, "gateway-token") as {
+      agents?: {
+        list?: Array<{
+          model?: { primary?: string; fallbacks?: string[] };
+        }>;
+      };
+    };
+
+    expect(rendered.agents?.list?.[0]?.model).toEqual({
+      primary: "anthropic/claude-sonnet-4-6",
+      fallbacks: ["endpoint/google/gemma-4-26B-A4B-it"],
+    });
+
+    rmSync(dir, { recursive: true, force: true });
   });
 
   it("emits an empty endpoint provider model list when no endpoint model is set yet", () => {
@@ -276,6 +317,76 @@ describe("model config generation", () => {
       id: "TELEGRAM_BOT_TOKEN",
     });
     expect(rendered.channels?.telegram?.allowFrom).toEqual([12345]);
+  });
+
+  it("rewrites managed vault helper commands onto the writable OpenClaw home volume", () => {
+    const config = makeConfig({
+      inferenceProvider: "anthropic",
+      secretsProvidersJson: JSON.stringify({
+        vault: {
+          source: "exec",
+          command: "/home/node/bin/openclaw-vault",
+          args: ["kv", "get", "-format=json", "-field=data", "secret/openclaw"],
+          passEnv: ["VAULT_ADDR", "VAULT_TOKEN"],
+          jsonOnly: true,
+        },
+      }),
+      anthropicApiKeyRef: {
+        source: "exec",
+        provider: "vault",
+        id: "providers/anthropic/apiKey",
+      },
+    });
+
+    const rendered = buildOpenClawConfig(config, "gateway-token") as {
+      secrets?: {
+        providers?: Record<string, {
+          command?: string;
+          timeoutMs?: number;
+          noOutputTimeoutMs?: number;
+        }>;
+      };
+    };
+
+    expect(rendered.secrets?.providers?.vault?.command).toBe("/home/node/.openclaw/bin/openclaw-vault");
+    expect(rendered.secrets?.providers?.vault?.timeoutMs).toBe(15000);
+    expect(rendered.secrets?.providers?.vault?.noOutputTimeoutMs).toBe(15000);
+  });
+
+  it("builds SecretRef-backed auth profiles for managed Anthropic and OpenAI credentials", () => {
+    const config = makeConfig({
+      inferenceProvider: "anthropic",
+      anthropicApiKeyRef: {
+        source: "exec",
+        provider: "vault",
+        id: "providers/anthropic/apiKey",
+      },
+      openaiApiKey: "sk-openai-runtime",
+    });
+
+    expect(buildManagedAgentAuthProfiles(config)).toEqual({
+      version: 1,
+      profiles: {
+        "anthropic:default": {
+          type: "api_key",
+          provider: "anthropic",
+          keyRef: {
+            source: "exec",
+            provider: "vault",
+            id: "providers/anthropic/apiKey",
+          },
+        },
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          keyRef: {
+            source: "env",
+            provider: "default",
+            id: "OPENAI_API_KEY",
+          },
+        },
+      },
+    });
   });
 
   it("uses a dedicated endpoint token when a model endpoint is configured", () => {

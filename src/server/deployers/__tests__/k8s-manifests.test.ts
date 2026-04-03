@@ -49,7 +49,7 @@ describe("k8s state sync manifests", () => {
     );
 
     const initContainer = deployment.spec?.template.spec?.initContainers?.[0];
-    expect(initContainer?.command?.[2]).toContain("find -L /agents-tree -mindepth 1 -type d -name 'workspace-*'");
+    expect(initContainer?.command?.[2]).toContain("for dir in /agents-tree/workspace-*; do");
     expect(initContainer?.command?.[2]).toContain("cp -r /skills-src/. /home/node/.openclaw/skills/");
     expect(initContainer?.command?.[2]).toContain("cp /cron-src/jobs.json /home/node/.openclaw/cron/jobs.json");
 
@@ -70,6 +70,52 @@ describe("k8s state sync manifests", () => {
     expect(cronVolume?.configMap?.name).toBe("openclaw-cron");
     expect(cronVolume?.configMap?.items).toEqual([{ key: "jobs.json", path: "jobs.json" }]);
   });
+
+  it("provisions the managed Vault helper in the writable home volume", () => {
+    const deployment = deploymentManifest("openclaw-alpha-openclaw", config);
+    const initContainer = deployment.spec?.template.spec?.initContainers?.[0];
+    const initScript = initContainer?.command?.[2] ?? "";
+
+    expect(initScript).toContain("cat > /home/node/.openclaw/bin/openclaw-vault <<'EOF_VAULT_HELPER'");
+    expect(initScript).toContain("#!/usr/local/bin/node");
+    expect(initScript).not.toContain("EOF_NODE");
+    expect(initScript).toContain("env.HOME = env.HOME || '/home/node';");
+    expect(initScript).toContain("vault kubernetes auth");
+    expect(initScript).toContain("chmod 0755 /home/node/.openclaw/bin/openclaw-vault");
+  });
+
+  it("writes SecretRef-backed auth profiles into each managed agent directory", () => {
+    const deployment = deploymentManifest(
+      "openclaw-alpha-openclaw",
+      makeConfig({
+        anthropicApiKeyRef: {
+          source: "exec",
+          provider: "vault",
+          id: "providers/anthropic/apiKey",
+        },
+        openaiApiKeyRef: {
+          source: "exec",
+          provider: "vault",
+          id: "providers/openai/apiKey",
+        },
+      }),
+    );
+    const initContainer = deployment.spec?.template.spec?.initContainers?.[0];
+    const initScript = initContainer?.command?.[2] ?? "";
+
+    expect(initScript).toContain("mkdir -p /home/node/.openclaw/agents/openclaw_alpha/agent");
+    expect(initScript).toContain("/home/node/.openclaw/agents/openclaw_alpha/agent/auth-profiles.json");
+    expect(initScript).toContain('"anthropic:default"');
+    expect(initScript).toContain('"openai:default"');
+    expect(initScript).toContain('"provider": "vault"');
+    expect(initScript).toContain('"id": "providers/anthropic/apiKey"');
+    expect(initScript).toContain('"id": "providers/openai/apiKey"');
+  });
+
+  it("uses the dedicated openclaw service account for non-A2A deployments", () => {
+    const deployment = deploymentManifest("openclaw-alpha-openclaw", config);
+    expect(deployment.spec?.template?.spec?.serviceAccountName).toBe("openclaw");
+  });
 });
 
 // Regression test for #62: workspace-shadowman not recognized as main agent workspace
@@ -86,26 +132,37 @@ describe("workspace routing in init script", () => {
     expect(initScript).not.toContain("= \"workspace-main\"");
   });
 
-  it("still copies workspace-* directories via find", () => {
+  it("still copies workspace-* directories via a shell loop", () => {
     const deployment = deploymentManifest("ns", makeConfig());
     const initContainer = deployment.spec?.template.spec?.initContainers?.[0];
     const initScript = initContainer?.command?.[2] ?? "";
 
-    expect(initScript).toContain("find -L /agents-tree -mindepth 1 -type d -name 'workspace-*'");
+    expect(initScript).toContain("for dir in /agents-tree/workspace-*; do");
+    expect(initScript).toContain("[ -d \"$dir\" ] || continue");
   });
 });
 
-// Regression test for #63: find must use -L to follow symlinks on K8s ConfigMap volumes
-describe("symlink traversal in init script", () => {
-  it("uses find -L to follow symlinks in ConfigMap volume projections", () => {
+// Regression test for #63: workspace copy must not depend on findutils in minimal init images
+describe("workspace copy in init script", () => {
+  it("copies workspace projections without find", () => {
     const deployment = deploymentManifest("ns", makeConfig());
     const initContainer = deployment.spec?.template.spec?.initContainers?.[0];
     const initScript = initContainer?.command?.[2] ?? "";
 
-    // K8s ConfigMap volumes project entries as symlinks through ..data/.
-    // Without -L, find -type d does not match symlinked directories.
-    expect(initScript).toContain("find -L /agents-tree");
-    expect(initScript).not.toMatch(/(?<!\S)find \/agents-tree/);
+    expect(initScript).toContain("for dir in /agents-tree/workspace-*; do");
+    expect(initScript).toContain("cp -r \"$dir\"/. \"$dest\"/");
+    expect(initScript).not.toContain("find -L /agents-tree");
+  });
+
+  it("uses ownership and group permissions that work on Kind and OpenShift", () => {
+    const deployment = deploymentManifest("ns", makeConfig());
+    const initContainer = deployment.spec?.template.spec?.initContainers?.[0];
+    const initScript = initContainer?.command?.[2] ?? "";
+
+    expect(initScript).toContain("chown -R 1000:0 /home/node/.openclaw");
+    expect(initScript).toContain("chmod -R g=u /home/node/.openclaw");
+    expect(initScript).toContain("chmod 0755 /home/node/.openclaw/bin/openclaw-vault");
+    expect(initScript).not.toContain("chown -R 1000:1000 /home/node/.openclaw");
   });
 });
 

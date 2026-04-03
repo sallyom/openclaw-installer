@@ -15,6 +15,7 @@ export interface AgentSourceAgentEntry {
 
 export interface AgentSourceBundle {
   mainAgent?: {
+    model?: { primary?: string; fallbacks?: string[] };
     tools?: Record<string, unknown>;
     subagents?: { allowAgents?: string[] };
   };
