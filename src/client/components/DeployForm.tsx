@@ -10,6 +10,7 @@ import {
   inferDisplayNameFromAgentName,
   buildSecretRef,
 } from "./deploy-form/utils.js";
+import { parsePodmanSecretMappingsText } from "../../shared/podman-secrets.js";
 import {
   applySavedVarsToConfig,
   buildDeployRequestBody,
@@ -293,12 +294,19 @@ export default function DeployForm({ onDeployStarted }: DeployFormProps) {
     setModelEndpointOptions(config.modelEndpointModels);
   }, [config.modelEndpointModels]);
 
-  const applyVars = (vars: Record<string, unknown>) => {
+  const applyVars = (vars: Record<string, unknown>, preserveMissing = true) => {
     const nextInferenceProvider = inferSavedInferenceProvider(vars);
     if (nextInferenceProvider) {
       setInferenceProvider(nextInferenceProvider);
     }
-    const applied = applySavedVarsToConfig(vars, config);
+    const baseConfig = preserveMissing
+      ? config
+      : {
+          ...createInitialDeployFormConfig(),
+          prefix: defaults?.prefix || "",
+          image: defaults?.image || "",
+        };
+    const applied = applySavedVarsToConfig(vars, baseConfig);
     setNamespaceManuallyEdited(applied.namespaceManuallyEdited);
     setConfig(applied.config);
   };
@@ -651,6 +659,10 @@ export default function DeployForm({ onDeployStarted }: DeployFormProps) {
     config.telegramBotTokenRefProvider,
     config.telegramBotTokenRefId,
   );
+  const podmanSecretMappingsParse = useMemo(
+    () => parsePodmanSecretMappingsText(config.podmanSecretMappingsText),
+    [config.podmanSecretMappingsText],
+  );
   const agentNameError = validateAgentName(config.agentName);
   const validationErrors: string[] = [];
   if (!config.agentName.trim()) {
@@ -689,6 +701,7 @@ export default function DeployForm({ onDeployStarted }: DeployFormProps) {
   if (config.telegramBotTokenRefId.trim() && !telegramBotTokenRef) {
     validationErrors.push("Telegram SecretRef requires source, provider, and id.");
   }
+  validationErrors.push(...podmanSecretMappingsParse.errors);
 
   const isValid = validationErrors.length === 0;
 
@@ -800,7 +813,7 @@ export default function DeployForm({ onDeployStarted }: DeployFormProps) {
                     setMode(cfg.type === "k8s"
                       ? (defaults?.isOpenShift ? "openshift" : "kubernetes")
                       : "local");
-                    applyVars(cfg.vars);
+                    applyVars(cfg.vars, false);
                     setLoadedConfigLabel(`${cfg.name} (${cfg.type === "k8s"
                       ? (defaults?.isOpenShift ? "OpenShift" : "K8s")
                       : "Local"})`);
@@ -1089,6 +1102,22 @@ export default function DeployForm({ onDeployStarted }: DeployFormProps) {
                 Use this for extra runtime flags such as <code>--userns=keep-id</code>, <code>--device</code>, or additional <code>-v</code> mounts.
               </div>
             </div>
+
+            {(defaults?.containerRuntime || "podman") === "podman" && (
+              <div className="form-group">
+                <label>Podman secret mappings <span style={{ color: "var(--text-secondary)", fontWeight: "normal" }}>(optional)</span></label>
+                <textarea
+                  rows={4}
+                  placeholder={"anthropic_api_key=ANTHROPIC_API_KEY\nopenai_api_key=OPENAI_API_KEY"}
+                  value={config.podmanSecretMappingsText}
+                  onChange={(e) => update("podmanSecretMappingsText", e.target.value)}
+                />
+                <div className="hint">
+                  One mapping per line in the form <code>podman_secret_name=ENV_VAR_NAME</code>.
+                  The installer appends the matching <code>--secret</code> flags automatically. Create the Podman secrets separately with <code>podman secret create</code>.
+                </div>
+              </div>
+            )}
           </>
         )}
 
@@ -1228,62 +1257,6 @@ export default function DeployForm({ onDeployStarted }: DeployFormProps) {
                 Only needed for MLflow endpoints. Sets the x-mlflow-experiment-id header on exported traces.
               </div>
             </div>
-          </>
-        )}
-
-        <h3 style={{ marginTop: "1.5rem" }}>Channels</h3>
-
-        <div className="form-group">
-          <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-            <input
-              type="checkbox"
-              checked={config.telegramEnabled}
-              onChange={(e) =>
-                setConfig((prev) => ({ ...prev, telegramEnabled: e.target.checked }))
-              }
-              style={{ width: "auto" }}
-            />
-            Connect Telegram Bot
-          </label>
-          <div className="hint">
-            {defaults?.hasTelegramToken
-              ? "Telegram bot token detected from environment"
-              : <>Create a bot via <a href="https://t.me/BotFather" target="_blank" rel="noreferrer">@BotFather</a> on Telegram</>}
-          </div>
-        </div>
-
-        {config.telegramEnabled && (
-          <>
-            <div className="form-group">
-              <label>Telegram Bot Token</label>
-              <input
-                type="password"
-                placeholder={defaults?.hasTelegramToken ? "(using token from environment)" : "123456:ABC-DEF..."}
-                value={config.telegramBotToken}
-                onChange={(e) => update("telegramBotToken", e.target.value)}
-              />
-              <div className="hint">
-                {defaults?.hasTelegramToken
-                  ? "Leave blank to use token from environment"
-                  : "Bot token from @BotFather"}
-              </div>
-            </div>
-
-            <div className="form-group">
-              <label>Allowed Telegram User IDs</label>
-              <input
-                type="password"
-                placeholder={defaults?.telegramAllowFrom ? "(using IDs from environment)" : "123456789, 987654321"}
-                value={config.telegramAllowFrom}
-                onChange={(e) => update("telegramAllowFrom", e.target.value)}
-              />
-              <div className="hint">
-                {defaults?.telegramAllowFrom
-                  ? "Leave blank to use IDs from environment"
-                  : <>Comma-separated user IDs. Find yours via <a href="https://t.me/userinfobot" target="_blank" rel="noreferrer">@userinfobot</a></>}
-              </div>
-            </div>
-
           </>
         )}
 

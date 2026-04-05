@@ -55,6 +55,13 @@ const LABEL_STYLE: React.CSSProperties = {
   marginBottom: "0.5rem",
 };
 
+function secretInputPreferenceHint(mode: string): string {
+  if (mode === "local") {
+    return "Prefer Podman secret mappings and SecretRefs for local deploys. Leave this blank when the key is injected via Podman secrets.";
+  }
+  return "Optional. If provided here, the installer stores it in the managed Kubernetes Secret. Leave this blank when using an external SecretRef provider.";
+}
+
 export function ProviderSection({
   config,
   defaults,
@@ -131,6 +138,9 @@ export function ProviderSection({
                 {defaults?.hasAnthropicKey
                   ? "Detected ANTHROPIC_API_KEY from server environment — leave blank to use it"
                   : "Saved for Anthropic primary or fallback usage."}
+              </div>
+              <div className="hint" style={{ marginTop: "0.35rem" }}>
+                {secretInputPreferenceHint(mode)}
               </div>
             </div>
             <div className="form-group">
@@ -254,6 +264,9 @@ export function ProviderSection({
                 {defaults?.hasOpenaiKey
                   ? "Detected OPENAI_API_KEY from server environment — leave blank to use it"
                   : "Saved for OpenAI primary or fallback usage only."}
+              </div>
+              <div className="hint" style={{ marginTop: "0.35rem" }}>
+                {secretInputPreferenceHint(mode)}
               </div>
             </div>
             <div className="form-group">
@@ -746,6 +759,9 @@ export function ProviderSection({
               />
               <div className="hint">
                 Separate from <code>OPENAI_API_KEY</code>. Use this when your OpenAI-compatible endpoint requires its own token.
+              </div>
+              <div className="hint" style={{ marginTop: "0.35rem" }}>
+                {secretInputPreferenceHint(mode)}
               </div>
             </div>
           </>

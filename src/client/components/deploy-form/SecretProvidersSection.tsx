@@ -102,43 +102,6 @@ export function SecretProvidersSection({ config, update }: SecretProvidersSectio
             </div>
           </div>
         </div>
-
-        <div className="card" style={{ marginBottom: "1rem" }}>
-          <div className="form-row">
-            <div className="form-group">
-              <label>Telegram SecretRef Source</label>
-              <select
-                value={config.telegramBotTokenRefSource}
-                onChange={(e) => update("telegramBotTokenRefSource", e.target.value)}
-              >
-                <option value="env">env</option>
-                <option value="file">file</option>
-                <option value="exec">exec</option>
-              </select>
-            </div>
-            <div className="form-group">
-              <label>Telegram SecretRef Provider</label>
-              <input
-                type="text"
-                placeholder="default"
-                value={config.telegramBotTokenRefProvider}
-                onChange={(e) => update("telegramBotTokenRefProvider", e.target.value)}
-              />
-            </div>
-          </div>
-          <div className="form-group">
-            <label>Telegram SecretRef ID</label>
-            <input
-              type="text"
-              placeholder="TELEGRAM_BOT_TOKEN or /channels/telegram/botToken or channels/telegram/botToken"
-              value={config.telegramBotTokenRefId}
-              onChange={(e) => update("telegramBotTokenRefId", e.target.value)}
-            />
-            <div className="hint">
-              Optional override. Leave blank to use the installer-managed env-backed SecretRef automatically.
-            </div>
-          </div>
-        </div>
       </div>
     </details>
   );

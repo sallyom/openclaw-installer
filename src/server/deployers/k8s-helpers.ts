@@ -56,6 +56,13 @@ export function usesDefaultEnvSecretRef(ref?: DeploySecretRef): ref is DeploySec
   return Boolean(ref?.source === "env" && ref.provider.trim() === "default" && ref.id.trim());
 }
 
+export function resolveEnvSecretRefId(ref: DeploySecretRef | undefined, fallbackId: string): string | undefined {
+  if (!ref) {
+    return fallbackId;
+  }
+  return usesDefaultEnvSecretRef(ref) ? ref.id.trim() : undefined;
+}
+
 export function normalizeModelRef(config: DeployConfig, modelRef: string): string {
   const trimmed = modelRef.trim();
   if (!trimmed) return trimmed;
@@ -223,6 +230,7 @@ export function deriveModel(config: DeployConfig): string {
 export function resolveSubagentModel(
   entryModel: { primary?: string; fallbacks?: string[] } | undefined,
   deployModel: string,
+  config?: DeployConfig,
 ): { primary: string; fallbacks?: string[] } {
   if (!entryModel?.primary) {
     const fallbacks = [...(entryModel?.fallbacks || [])]
@@ -233,15 +241,28 @@ export function resolveSubagentModel(
       : { primary: deployModel };
   }
 
-  const fallbacks = [...(entryModel.fallbacks || [])];
+  const primary = entryModel.primary.trim();
+  const normalizedFallbacks = [...(entryModel.fallbacks || [])]
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
 
-  if (entryModel.primary !== deployModel && !fallbacks.includes(deployModel)) {
+  if (config && detectUnavailableProvider(primary, config)) {
+    const fallbacks = [primary, ...normalizedFallbacks]
+      .filter((entry, index, all) => entry !== deployModel && all.indexOf(entry) === index);
+    return fallbacks.length > 0
+      ? { primary: deployModel, fallbacks }
+      : { primary: deployModel };
+  }
+
+  const fallbacks = [...normalizedFallbacks];
+
+  if (primary !== deployModel && !fallbacks.includes(deployModel)) {
     fallbacks.push(deployModel);
   }
 
   return fallbacks.length > 0
-    ? { primary: entryModel.primary, fallbacks }
-    : { primary: entryModel.primary };
+    ? { primary, fallbacks }
+    : { primary };
 }
 
 /**
@@ -499,7 +520,7 @@ export function buildOpenClawConfig(config: DeployConfig, gatewayToken: string):
           identity: { name: config.agentDisplayName || config.agentName },
           workspace: `~/.openclaw/workspace-${id}`,
           model: sourceBundle?.mainAgent?.model
-            ? resolveSubagentModel(sourceBundle.mainAgent.model, model)
+            ? resolveSubagentModel(sourceBundle.mainAgent.model, model, config)
             : buildAgentModelConfig(config, model),
           subagents: sourceBundle?.mainAgent?.subagents || subagentConfig(config.subagentPolicy),
           ...(sourceBundle?.mainAgent?.tools ? { tools: sourceBundle.mainAgent.tools } : {}),
@@ -510,7 +531,7 @@ export function buildOpenClawConfig(config: DeployConfig, gatewayToken: string):
           name: entry.name || entry.id,
           ...(entry.name ? { identity: { name: entry.name } } : {}),
           workspace: `~/.openclaw/workspace-${entry.id}`,
-          model: resolveSubagentModel(entry.model, model),
+          model: resolveSubagentModel(entry.model, model, config),
           ...(entry.subagents ? { subagents: entry.subagents } : {}),
           ...(entry.tools ? { tools: entry.tools } : {}),
         }))),

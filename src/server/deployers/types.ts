@@ -1,3 +1,5 @@
+import type { PodmanSecretMapping } from "../../shared/podman-secrets.js";
+
 export type DeployMode = string;
 export type BuiltinDeployMode = "local" | "kubernetes" | "ssh" | "fleet";
 export type InferenceProvider =
@@ -101,6 +103,7 @@ export interface DeployConfig {
   // Local mode
   containerRuntime?: "podman" | "docker";
   containerRunArgs?: string;
+  podmanSecretMappings?: PodmanSecretMapping[];
   image?: string;
   port?: number;
   agentSourceDir?: string; // Host directory with workspace-*, skills/, and cron/jobs.json to provision

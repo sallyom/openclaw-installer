@@ -41,12 +41,14 @@ import {
   detectUnavailableProvider,
   generateToken,
   normalizeModelRef,
+  resolveEnvSecretRefId,
   resolveSubagentModel,
   usesDefaultEnvSecretRef,
 } from "./k8s-helpers.js";
 import { buildSandboxConfig } from "./sandbox.js";
 import { buildSandboxToolPolicy } from "./tool-policy.js";
 import { loadAgentSourceBundle, loadAgentSourceMcpServers, mainWorkspaceShellCondition } from "./agent-source.js";
+import { buildPodmanSecretRunArgs, hasPodmanSecretTarget } from "../../shared/podman-secrets.js";
 
 const DEFAULT_IMAGE = process.env.OPENCLAW_IMAGE || "ghcr.io/openclaw/openclaw:latest";
 const DEFAULT_VERTEX_IMAGE = process.env.OPENCLAW_VERTEX_IMAGE || DEFAULT_IMAGE;
@@ -297,6 +299,15 @@ function shouldAutoEnvRef(explicitRef: DeploySecretRef | undefined, value: strin
   return !hasSecretRef(explicitRef) && Boolean(value?.trim());
 }
 
+function shouldAutoInjectedEnvRef(
+  config: DeployConfig,
+  explicitRef: DeploySecretRef | undefined,
+  value: string | undefined,
+  envId: string,
+): boolean {
+  return shouldAutoEnvRef(explicitRef, value) || (!hasSecretRef(explicitRef) && hasPodmanSecretTarget(config.podmanSecretMappings, envId));
+}
+
 function envSecretRef(id: string): DeploySecretRef {
   return {
     source: "env",
@@ -314,10 +325,14 @@ function attachSecretHandlingConfig(ocConfig: Record<string, unknown>, config: D
 
   const openaiApiKeyRef = hasSecretRef(config.openaiApiKeyRef)
     ? config.openaiApiKeyRef
-    : shouldAutoEnvRef(config.openaiApiKeyRef, config.openaiApiKey)
+    : shouldAutoInjectedEnvRef(config, config.openaiApiKeyRef, config.openaiApiKey, "OPENAI_API_KEY")
       ? envSecretRef("OPENAI_API_KEY")
       : undefined;
-  const modelEndpointApiKeyRef = config.modelEndpointApiKey ? envSecretRef("MODEL_ENDPOINT_API_KEY") : undefined;
+  const modelEndpointApiKeyRef = (
+    config.modelEndpointApiKey || hasPodmanSecretTarget(config.podmanSecretMappings, "MODEL_ENDPOINT_API_KEY")
+  )
+    ? envSecretRef("MODEL_ENDPOINT_API_KEY")
+    : undefined;
   if (openaiApiKeyRef) {
     if (openaiApiKeyRef.source === "env" && openaiApiKeyRef.provider === "default") {
       shouldDefineDefaultEnvProvider = true;
@@ -374,7 +389,7 @@ function attachSecretHandlingConfig(ocConfig: Record<string, unknown>, config: D
 
   const telegramBotTokenRef = hasSecretRef(config.telegramBotTokenRef)
     ? config.telegramBotTokenRef
-    : shouldAutoEnvRef(config.telegramBotTokenRef, config.telegramBotToken)
+    : shouldAutoInjectedEnvRef(config, config.telegramBotTokenRef, config.telegramBotToken, "TELEGRAM_BOT_TOKEN")
       ? envSecretRef("TELEGRAM_BOT_TOKEN")
       : undefined;
   if (telegramBotTokenRef) {
@@ -487,7 +502,7 @@ function buildOpenClawConfig(config: DeployConfig, gatewayToken: string): string
           identity: { name: config.agentDisplayName || config.agentName },
           workspace: `~/.openclaw/workspace-${agentId}`,
           model: sourceBundle?.mainAgent?.model
-            ? resolveSubagentModel(sourceBundle.mainAgent.model, model)
+            ? resolveSubagentModel(sourceBundle.mainAgent.model, model, config)
             : buildAgentModelConfig(config, model),
           subagents: sourceBundle?.mainAgent?.subagents || subagentConfig(config.subagentPolicy),
           ...(sourceBundle?.mainAgent?.tools ? { tools: sourceBundle.mainAgent.tools } : {}),
@@ -498,7 +513,7 @@ function buildOpenClawConfig(config: DeployConfig, gatewayToken: string): string
           name: entry.name || entry.id,
           ...(entry.name ? { identity: { name: entry.name } } : {}),
           workspace: `~/.openclaw/workspace-${entry.id}`,
-          model: resolveSubagentModel(entry.model, model),
+          model: resolveSubagentModel(entry.model, model, config),
           ...(entry.subagents ? { subagents: entry.subagents } : {}),
           ...(entry.tools ? { tools: entry.tools } : {}),
         }))),
@@ -773,17 +788,13 @@ function buildRunArgs(
 
   // Pass API keys to the gateway so it can route to OpenAI/Anthropic natively.
   // LiteLLM only handles Vertex models — secondary providers go direct.
-  if (
-    effectiveConfig.anthropicApiKey
-    && (!effectiveConfig.anthropicApiKeyRef || usesDefaultEnvSecretRef(effectiveConfig.anthropicApiKeyRef))
-  ) {
-    env.ANTHROPIC_API_KEY = effectiveConfig.anthropicApiKey;
+  const anthropicEnvRefId = resolveEnvSecretRefId(effectiveConfig.anthropicApiKeyRef, "ANTHROPIC_API_KEY");
+  if (effectiveConfig.anthropicApiKey && anthropicEnvRefId) {
+    env[anthropicEnvRefId] = effectiveConfig.anthropicApiKey;
   }
-  if (
-    effectiveConfig.openaiApiKey
-    && (!effectiveConfig.openaiApiKeyRef || usesDefaultEnvSecretRef(effectiveConfig.openaiApiKeyRef))
-  ) {
-    env.OPENAI_API_KEY = effectiveConfig.openaiApiKey;
+  const openaiEnvRefId = resolveEnvSecretRefId(effectiveConfig.openaiApiKeyRef, "OPENAI_API_KEY");
+  if (effectiveConfig.openaiApiKey && openaiEnvRefId) {
+    env[openaiEnvRefId] = effectiveConfig.openaiApiKey;
   }
   if (effectiveConfig.modelEndpoint) {
     env.MODEL_ENDPOINT = effectiveConfig.modelEndpoint;
@@ -812,11 +823,9 @@ function buildRunArgs(
     }
   }
 
-  if (
-    effectiveConfig.telegramBotToken
-    && (!effectiveConfig.telegramBotTokenRef || usesDefaultEnvSecretRef(effectiveConfig.telegramBotTokenRef))
-  ) {
-    env.TELEGRAM_BOT_TOKEN = effectiveConfig.telegramBotToken;
+  const telegramEnvRefId = resolveEnvSecretRefId(effectiveConfig.telegramBotTokenRef, "TELEGRAM_BOT_TOKEN");
+  if (effectiveConfig.telegramBotToken && telegramEnvRefId) {
+    env[telegramEnvRefId] = effectiveConfig.telegramBotToken;
   }
   if (effectiveConfig.sandboxEnabled) {
     if (effectiveConfig.sandboxSshIdentity) {
@@ -840,6 +849,12 @@ function buildRunArgs(
   }
 
   runArgs.push(...localStateMountArgs(effectiveConfig));
+  if (effectiveConfig.podmanSecretMappings?.length) {
+    if (!isPodman) {
+      throw new Error("Podman secret mappings require the Podman runtime.");
+    }
+    runArgs.push(...buildPodmanSecretRunArgs(effectiveConfig.podmanSecretMappings));
+  }
   runArgs.push(...parseContainerRunArgs(effectiveConfig.containerRunArgs));
   runArgs.push(image);
 
@@ -1681,6 +1696,9 @@ Use this table to track verified peer OpenClaw instances.
         `OPENCLAW_PORT=${config.port ?? DEFAULT_PORT}`,
         ...(config.containerRunArgs
           ? [`OPENCLAW_CONTAINER_RUN_ARGS=${config.containerRunArgs}`]
+          : []),
+        ...(config.podmanSecretMappings && config.podmanSecretMappings.length > 0
+          ? [`PODMAN_SECRET_MAPPINGS_B64=${encodeEnvValue(JSON.stringify(config.podmanSecretMappings))}`]
           : []),
         `OPENCLAW_VOLUME=${volumeName(config)}`,
         `OPENCLAW_CONTAINER=${name}`,

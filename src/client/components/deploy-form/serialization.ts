@@ -4,6 +4,11 @@ import {
   encodeBase64,
   trimToUndefined,
 } from "./utils.js";
+import {
+  formatPodmanSecretMappingsText,
+  normalizePodmanSecretMappings,
+  parsePodmanSecretMappingsText,
+} from "../../../shared/podman-secrets.js";
 import type {
   DeployFormConfig,
   InferenceProvider,
@@ -18,6 +23,7 @@ export function createInitialDeployFormConfig(): DeployFormConfig {
     agentDisplayName: "",
     image: "",
     containerRunArgs: "",
+    podmanSecretMappingsText: "",
     secretsProvidersJson: "",
     anthropicApiKeyRefSource: "env",
     anthropicApiKeyRefProvider: "default",
@@ -127,6 +133,31 @@ function decodeSecretsProvidersJson(vars: Record<string, unknown>): string {
   return typeof vars.secretsProvidersJson === "string" ? vars.secretsProvidersJson : "";
 }
 
+function decodePodmanSecretMappingsText(vars: Record<string, unknown>): string {
+  const decoded = decodeJsonBase64<{ secretName: string; targetEnv: string }[]>(
+    vars.PODMAN_SECRET_MAPPINGS_B64 as string | undefined,
+  );
+  if (decoded) {
+    return formatPodmanSecretMappingsText(normalizePodmanSecretMappings(decoded));
+  }
+  return typeof vars.podmanSecretMappingsText === "string" ? vars.podmanSecretMappingsText : "";
+}
+
+function inferredEnvSecretRefFromPodmanMappings(
+  mappingsText: string,
+  targetEnv: string,
+): SecretRefValue | undefined {
+  const parsed = parsePodmanSecretMappingsText(mappingsText);
+  if (parsed.mappings.some((mapping) => mapping.targetEnv === targetEnv)) {
+    return {
+      source: "env",
+      provider: "default",
+      id: targetEnv,
+    };
+  }
+  return undefined;
+}
+
 export function inferSavedInferenceProvider(vars: Record<string, unknown>): InferenceProvider | undefined {
   const savedInferenceProvider = getStringVar(vars, "INFERENCE_PROVIDER", "inferenceProvider");
   if (
@@ -166,6 +197,9 @@ export function applySavedVarsToConfig(
   const openaiApiKeyRef = decodeSecretRefVar(vars, "OPENAI_API_KEY_REF_B64", "openaiApiKeyRef");
   const telegramBotTokenRef = decodeSecretRefVar(vars, "TELEGRAM_BOT_TOKEN_REF_B64", "telegramBotTokenRef");
   const savedProvidersJson = decodeSecretsProvidersJson(vars);
+  const savedPodmanSecretMappingsText = decodePodmanSecretMappingsText(vars);
+  const inferredAnthropicRef = anthropicApiKeyRef || inferredEnvSecretRefFromPodmanMappings(savedPodmanSecretMappingsText, "ANTHROPIC_API_KEY");
+  const inferredOpenaiRef = openaiApiKeyRef || inferredEnvSecretRefFromPodmanMappings(savedPodmanSecretMappingsText, "OPENAI_API_KEY");
   const explicitNamespace = getStringVar(vars, "K8S_NAMESPACE", "namespace");
   const savedEndpointModels = decodeEndpointModelsVar(vars);
 
@@ -178,13 +212,14 @@ export function applySavedVarsToConfig(
       agentDisplayName: getStringVar(vars, "OPENCLAW_DISPLAY_NAME", "agentDisplayName") || prev.agentDisplayName,
       image: getStringVar(vars, "OPENCLAW_IMAGE", "image") || prev.image,
       containerRunArgs: getStringVar(vars, "OPENCLAW_CONTAINER_RUN_ARGS", "containerRunArgs") || prev.containerRunArgs,
+      podmanSecretMappingsText: savedPodmanSecretMappingsText || prev.podmanSecretMappingsText,
       secretsProvidersJson: savedProvidersJson || prev.secretsProvidersJson,
-      anthropicApiKeyRefSource: anthropicApiKeyRef?.source || prev.anthropicApiKeyRefSource,
-      anthropicApiKeyRefProvider: anthropicApiKeyRef?.provider || prev.anthropicApiKeyRefProvider,
-      anthropicApiKeyRefId: anthropicApiKeyRef?.id || prev.anthropicApiKeyRefId,
-      openaiApiKeyRefSource: openaiApiKeyRef?.source || prev.openaiApiKeyRefSource,
-      openaiApiKeyRefProvider: openaiApiKeyRef?.provider || prev.openaiApiKeyRefProvider,
-      openaiApiKeyRefId: openaiApiKeyRef?.id || prev.openaiApiKeyRefId,
+      anthropicApiKeyRefSource: inferredAnthropicRef?.source || prev.anthropicApiKeyRefSource,
+      anthropicApiKeyRefProvider: inferredAnthropicRef?.provider || prev.anthropicApiKeyRefProvider,
+      anthropicApiKeyRefId: inferredAnthropicRef?.id || prev.anthropicApiKeyRefId,
+      openaiApiKeyRefSource: inferredOpenaiRef?.source || prev.openaiApiKeyRefSource,
+      openaiApiKeyRefProvider: inferredOpenaiRef?.provider || prev.openaiApiKeyRefProvider,
+      openaiApiKeyRefId: inferredOpenaiRef?.id || prev.openaiApiKeyRefId,
       telegramBotTokenRefSource: telegramBotTokenRef?.source || prev.telegramBotTokenRefSource,
       telegramBotTokenRefProvider: telegramBotTokenRef?.provider || prev.telegramBotTokenRefProvider,
       telegramBotTokenRefId: telegramBotTokenRef?.id || prev.telegramBotTokenRefId,
@@ -339,6 +374,7 @@ export function buildDeployRequestBody(params: {
     telegramBotTokenRef,
   } = params;
   const vertexProvider = inferenceProvider === "vertex-google" ? "google" : "anthropic";
+  const podmanSecretMappings = parsePodmanSecretMappingsText(config.podmanSecretMappingsText).mappings;
 
   return {
     mode,
@@ -348,6 +384,7 @@ export function buildDeployRequestBody(params: {
     agentDisplayName: config.agentDisplayName || config.agentName,
     image: trimToUndefined(config.image),
     containerRunArgs: mode === "local" ? trimToUndefined(config.containerRunArgs) : undefined,
+    podmanSecretMappings: mode === "local" && podmanSecretMappings.length > 0 ? podmanSecretMappings : undefined,
     secretsProvidersJson: trimToUndefined(config.secretsProvidersJson),
     anthropicApiKeyRef,
     openaiApiKeyRef,
@@ -454,6 +491,7 @@ export function buildEnvFileContent(params: {
     `OPENCLAW_DISPLAY_NAME=${config.agentDisplayName}`,
     `OPENCLAW_IMAGE=${config.image}`,
     `OPENCLAW_CONTAINER_RUN_ARGS=${config.containerRunArgs}`,
+    `PODMAN_SECRET_MAPPINGS_B64=${encodeBase64(JSON.stringify(parsePodmanSecretMappingsText(config.podmanSecretMappingsText).mappings))}`,
     `OPENCLAW_PORT=${config.port}`,
     `AGENT_SOURCE_DIR=${config.agentSourceDir}`,
     "",

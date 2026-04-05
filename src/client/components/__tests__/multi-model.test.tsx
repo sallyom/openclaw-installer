@@ -69,6 +69,23 @@ describe("Multi-model per provider", () => {
       });
       expect(body.openaiModels).toBeUndefined();
     });
+
+    it("includes parsed Podman secret mappings for local deploys", () => {
+      const config = createInitialDeployFormConfig();
+      config.agentName = "test";
+      config.podmanSecretMappingsText = "anthropic_api_key=ANTHROPIC_API_KEY\nopenai_api_key=OPENAI_API_KEY";
+      const body = buildDeployRequestBody({
+        mode: "local",
+        inferenceProvider: "anthropic",
+        config,
+        isVertex: false,
+        suggestedNamespace: "test-ns",
+      });
+      expect(body.podmanSecretMappings).toEqual([
+        { secretName: "anthropic_api_key", targetEnv: "ANTHROPIC_API_KEY" },
+        { secretName: "openai_api_key", targetEnv: "OPENAI_API_KEY" },
+      ]);
+    });
   });
 
   describe("buildEnvFileContent", () => {
@@ -90,6 +107,22 @@ describe("Multi-model per provider", () => {
       expect(anthropicMatch).toBeTruthy();
       const decoded = JSON.parse(window.atob(anthropicMatch![1]));
       expect(decoded).toEqual(["claude-opus-4-6"]);
+    });
+
+    it("encodes Podman secret mappings as base64", () => {
+      const config = createInitialDeployFormConfig();
+      config.agentName = "test";
+      config.podmanSecretMappingsText = "joy_token=JOY_TELEGRAM_BOT_TOKEN";
+      const env = buildEnvFileContent({
+        config,
+        inferenceProvider: "anthropic",
+        isVertex: false,
+        suggestedNamespace: "test-ns",
+      });
+      const match = env.match(/PODMAN_SECRET_MAPPINGS_B64=(.+)/);
+      expect(match).toBeTruthy();
+      const decoded = JSON.parse(window.atob(match![1]));
+      expect(decoded).toEqual([{ secretName: "joy_token", targetEnv: "JOY_TELEGRAM_BOT_TOKEN" }]);
     });
   });
 
@@ -125,6 +158,34 @@ describe("Multi-model per provider", () => {
       };
       const { config } = applySavedVarsToConfig(vars, prev);
       expect(config.openaiModels).toEqual(models);
+    });
+
+    it("loads Podman secret mappings from B64", () => {
+      const prev = createInitialDeployFormConfig();
+      const mappings = [{ secretName: "anthropic_api_key", targetEnv: "ANTHROPIC_API_KEY" }];
+      const vars: Record<string, unknown> = {
+        PODMAN_SECRET_MAPPINGS_B64: window.btoa(JSON.stringify(mappings)),
+      };
+      const { config } = applySavedVarsToConfig(vars, prev);
+      expect(config.podmanSecretMappingsText).toBe("anthropic_api_key=ANTHROPIC_API_KEY");
+    });
+
+    it("infers env/default SecretRefs from Podman secret mappings for known model providers", () => {
+      const prev = createInitialDeployFormConfig();
+      const mappings = [
+        { secretName: "anthropic_api_key", targetEnv: "ANTHROPIC_API_KEY" },
+        { secretName: "openai_api_key", targetEnv: "OPENAI_API_KEY" },
+      ];
+      const vars: Record<string, unknown> = {
+        PODMAN_SECRET_MAPPINGS_B64: window.btoa(JSON.stringify(mappings)),
+      };
+      const { config } = applySavedVarsToConfig(vars, prev);
+      expect(config.anthropicApiKeyRefSource).toBe("env");
+      expect(config.anthropicApiKeyRefProvider).toBe("default");
+      expect(config.anthropicApiKeyRefId).toBe("ANTHROPIC_API_KEY");
+      expect(config.openaiApiKeyRefSource).toBe("env");
+      expect(config.openaiApiKeyRefProvider).toBe("default");
+      expect(config.openaiApiKeyRefId).toBe("OPENAI_API_KEY");
     });
   });
 });

@@ -80,6 +80,7 @@ For local deploys, the installer now follows the upstream OpenClaw secret model 
 - secrets you enter in the form are injected into the container as environment variables
 - generated `openclaw.json` uses env-backed SecretRefs instead of storing those raw values directly
 - you can optionally provide `secrets.providers` JSON and explicit SecretRef overrides for `env`, `file`, or `exec` providers
+- for Podman setups, you can also use the **Podman secret mappings** field to expand `podman secret create` entries into runtime `--secret` flags automatically
 
 This means the container still receives the credentials it needs, but `openclaw.json` does not embed the plaintext API keys or Telegram bot token.
 

@@ -4,6 +4,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { userInfo } from "node:os";
 import type { DeployConfig, DeploySecretRef } from "../deployers/types.js";
 import { validateAgentName } from "../../shared/validate-agent-name.js";
+import { hasPodmanSecretTarget, normalizePodmanSecretMappings } from "../../shared/podman-secrets.js";
 import { detectGcpDefaults, defaultVertexLocation } from "../services/gcp.js";
 import { normalizeModelEndpointBaseUrl } from "../services/model-endpoint.js";
 import { namespaceName } from "../deployers/k8s-helpers.js";
@@ -70,16 +71,31 @@ export function applyServerEnvFallbacks(config: DeployConfig, env: NodeJS.Proces
   if (!config.image && env.OPENCLAW_IMAGE) {
     config.image = env.OPENCLAW_IMAGE;
   }
-  if (!config.anthropicApiKey && !config.anthropicApiKeyRef && env.ANTHROPIC_API_KEY) {
+  if (
+    !config.anthropicApiKey
+    && !config.anthropicApiKeyRef
+    && !hasPodmanSecretTarget(config.podmanSecretMappings, "ANTHROPIC_API_KEY")
+    && env.ANTHROPIC_API_KEY
+  ) {
     config.anthropicApiKey = env.ANTHROPIC_API_KEY;
   }
-  if (!config.openaiApiKey && !config.openaiApiKeyRef && env.OPENAI_API_KEY) {
+  if (
+    !config.openaiApiKey
+    && !config.openaiApiKeyRef
+    && !hasPodmanSecretTarget(config.podmanSecretMappings, "OPENAI_API_KEY")
+    && env.OPENAI_API_KEY
+  ) {
     config.openaiApiKey = env.OPENAI_API_KEY;
   }
   if (!config.modelEndpoint && config.inferenceProvider === "custom-endpoint" && env.MODEL_ENDPOINT) {
     config.modelEndpoint = env.MODEL_ENDPOINT;
   }
-  if (config.modelEndpoint && !config.modelEndpointApiKey && env.MODEL_ENDPOINT_API_KEY) {
+  if (
+    config.modelEndpoint
+    && !config.modelEndpointApiKey
+    && !hasPodmanSecretTarget(config.podmanSecretMappings, "MODEL_ENDPOINT_API_KEY")
+    && env.MODEL_ENDPOINT_API_KEY
+  ) {
     config.modelEndpointApiKey = env.MODEL_ENDPOINT_API_KEY;
   }
   if (config.telegramEnabled) {
@@ -123,6 +139,7 @@ router.post("/", async (req, res) => {
   config.sshUser = trimOptional(config.sshUser);
   config.agentSourceDir = trimOptional(config.agentSourceDir);
   config.containerRunArgs = trimOptional(config.containerRunArgs);
+  config.podmanSecretMappings = normalizePodmanSecretMappings(config.podmanSecretMappings);
   config.modelFallbacks = normalizeModelFallbacks(config.modelFallbacks);
   config.otelEndpoint = trimOptional(config.otelEndpoint);
   config.otelExperimentId = trimOptional(config.otelExperimentId);

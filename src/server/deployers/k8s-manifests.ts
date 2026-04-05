@@ -5,6 +5,7 @@ import {
   tryParseProjectId,
   buildOpenClawConfig,
   buildManagedAgentAuthProfiles,
+  resolveEnvSecretRefId,
   usesDefaultEnvSecretRef,
 } from "./k8s-helpers.js";
 import type { DeployConfig } from "./types.js";
@@ -150,16 +151,19 @@ export function secretManifest(ns: string, config: DeployConfig, gatewayToken: s
   const data: Record<string, string> = {
     OPENCLAW_GATEWAY_TOKEN: gatewayToken,
   };
-  if (config.anthropicApiKey && (!config.anthropicApiKeyRef || usesDefaultEnvSecretRef(config.anthropicApiKeyRef))) {
-    data.ANTHROPIC_API_KEY = config.anthropicApiKey;
+  const anthropicEnvRefId = resolveEnvSecretRefId(config.anthropicApiKeyRef, "ANTHROPIC_API_KEY");
+  if (config.anthropicApiKey && anthropicEnvRefId) {
+    data[anthropicEnvRefId] = config.anthropicApiKey;
   }
-  if (config.openaiApiKey && (!config.openaiApiKeyRef || usesDefaultEnvSecretRef(config.openaiApiKeyRef))) {
-    data.OPENAI_API_KEY = config.openaiApiKey;
+  const openaiEnvRefId = resolveEnvSecretRefId(config.openaiApiKeyRef, "OPENAI_API_KEY");
+  if (config.openaiApiKey && openaiEnvRefId) {
+    data[openaiEnvRefId] = config.openaiApiKey;
   }
   if (config.modelEndpoint) data.MODEL_ENDPOINT = config.modelEndpoint;
   if (config.modelEndpointApiKey) data.MODEL_ENDPOINT_API_KEY = config.modelEndpointApiKey;
-  if (config.telegramBotToken && (!config.telegramBotTokenRef || usesDefaultEnvSecretRef(config.telegramBotTokenRef))) {
-    data.TELEGRAM_BOT_TOKEN = config.telegramBotToken;
+  const telegramEnvRefId = resolveEnvSecretRefId(config.telegramBotTokenRef, "TELEGRAM_BOT_TOKEN");
+  if (config.telegramBotToken && telegramEnvRefId) {
+    data[telegramEnvRefId] = config.telegramBotToken;
   }
 
   // Resolve project ID from config or from the SA JSON

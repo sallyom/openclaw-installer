@@ -195,7 +195,7 @@ describe("DeployForm agent name validation (issue #7)", () => {
     });
   });
 
-  it("shows Agent Options controls and all advanced secret override targets", async () => {
+  it("shows Agent Options controls and model secret override targets", async () => {
     global.fetch = mockHealthResponse([
       { mode: "local", title: "This Machine", description: "Run locally", available: true, priority: 0, builtIn: true },
     ]);
@@ -213,7 +213,93 @@ describe("DeployForm agent name validation (issue #7)", () => {
 
     expect(await screen.findByText("Anthropic SecretRef Source")).toBeTruthy();
     expect(screen.getByText("OpenAI SecretRef Source")).toBeTruthy();
-    expect(screen.getByText("Telegram SecretRef Source")).toBeTruthy();
+  });
+
+  it("validates Podman secret mapping syntax", async () => {
+    global.fetch = mockHealthResponse([
+      { mode: "local", title: "This Machine", description: "Run locally", available: true, priority: 0, builtIn: true },
+    ]);
+
+    render(<DeployForm onDeployStarted={() => {}} />);
+
+    await screen.findAllByRole("button", { name: /deploy openclaw/i });
+
+    fireEvent.change(screen.getAllByPlaceholderText("e.g., lynx")[0], { target: { value: "lynx" } });
+    const podmanMappingsInput = screen.getAllByRole("textbox").find((element) =>
+      (element as HTMLTextAreaElement).placeholder.includes("anthropic_api_key=ANTHROPIC_API_KEY"),
+    );
+    expect(podmanMappingsInput).toBeTruthy();
+    fireEvent.change(
+      podmanMappingsInput!,
+      { target: { value: "not valid" } },
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Invalid Podman secret mapping: "not valid". Use secret_name=ENV_VAR_NAME.')).toBeTruthy();
+    });
+  });
+
+  it("does not retain stale secret providers JSON when loading a saved local config", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/health") {
+        return {
+          ok: true,
+          json: async () => healthJson([
+            { mode: "local", title: "This Machine", description: "Run locally", available: true, priority: 0, builtIn: true },
+          ]),
+        };
+      }
+      if (url === "/api/configs") {
+        return {
+          ok: true,
+          json: async () => [
+            {
+              name: "local-saved",
+              type: "local",
+              vars: {
+                OPENCLAW_AGENT_NAME: "lynx",
+                MODEL_ENDPOINT: "http://100.76.40.32:8000/v1",
+                MODEL_ENDPOINT_MODEL: "google/gemma-4-26B-A4B-it",
+              },
+            },
+          ],
+        };
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    global.fetch = fetchMock as typeof global.fetch;
+
+    render(<DeployForm onDeployStarted={() => {}} />);
+
+    await screen.findAllByRole("button", { name: /deploy openclaw/i });
+
+    fireEvent.click(screen.getByText("Advanced: Experimental External Secret Providers"));
+    const secretProvidersTextarea = screen.getAllByRole("textbox").find((element) =>
+      (element as HTMLTextAreaElement).placeholder.includes("{"),
+    ) as HTMLTextAreaElement | undefined;
+    expect(secretProvidersTextarea).toBeTruthy();
+
+    fireEvent.change(secretProvidersTextarea!, {
+      target: {
+        value: JSON.stringify({
+          vault: {
+            command: "/home/node/.openclaw/bin/openclaw-vault",
+          },
+        }),
+      },
+    });
+
+    const savedConfigSelect = screen.getAllByRole("combobox").find((element) =>
+      Array.from((element as HTMLSelectElement).options).some((option) => option.text.includes("local-saved")),
+    ) as HTMLSelectElement | undefined;
+    expect(savedConfigSelect).toBeTruthy();
+
+    fireEvent.change(savedConfigSelect!, { target: { value: "local-saved" } });
+
+    await waitFor(() => {
+      expect(secretProvidersTextarea!.value).toBe("");
+    });
   });
 
   it("shows separate OpenAI and OpenAI-compatible endpoint key fields", async () => {

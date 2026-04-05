@@ -36,8 +36,19 @@ podman run \
 
 The secret is available inside the container as `$GH_TOKEN`. It is not written to disk.
 
-In the openclaw-installer UI, add `--secret` flags in the **Extra Podman Args** field.
-They are preserved across Stop/Start cycles.
+In the openclaw-installer UI, use **Podman secret mappings** instead of typing the raw
+`--secret` syntax yourself. Enter one mapping per line:
+
+```text
+gh_token=GH_TOKEN
+anthropic_api_key=ANTHROPIC_API_KEY
+```
+
+The installer appends the matching `--secret <name>,type=env,target=<ENV>` flags automatically
+and preserves them across Stop/Start cycles.
+
+If you also use explicit OpenClaw `env/default/...` SecretRefs, make sure the SecretRef ID matches
+the target environment variable name from the mapping.
 
 ### Manage secrets
 

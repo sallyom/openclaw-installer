@@ -9,6 +9,7 @@ import {
   detectUnavailableProvider,
   namespaceName,
   normalizeModelRef,
+  resolveEnvSecretRefId,
   resolveSubagentModel,
   sanitizeForRfc1123,
   usesDefaultEnvSecretRef,
@@ -29,6 +30,18 @@ describe("model config generation", () => {
     expect(usesDefaultEnvSecretRef({ source: "env", provider: "default", id: "OPENAI_API_KEY" })).toBe(true);
     expect(usesDefaultEnvSecretRef({ source: "env", provider: "vault", id: "OPENAI_API_KEY" })).toBe(false);
     expect(usesDefaultEnvSecretRef({ source: "exec", provider: "default", id: "OPENAI_API_KEY" })).toBe(false);
+  });
+
+  it("resolves the injected env var name for custom env/default SecretRefs", () => {
+    expect(resolveEnvSecretRefId(undefined, "OPENAI_API_KEY")).toBe("OPENAI_API_KEY");
+    expect(resolveEnvSecretRefId(
+      { source: "env", provider: "default", id: "JOY_TELEGRAM_BOT_TOKEN" },
+      "TELEGRAM_BOT_TOKEN",
+    )).toBe("JOY_TELEGRAM_BOT_TOKEN");
+    expect(resolveEnvSecretRefId(
+      { source: "exec", provider: "vault", id: "providers/openai/apiKey" },
+      "OPENAI_API_KEY",
+    )).toBeUndefined();
   });
 
   it("never deploys into the default namespace implicitly", () => {
@@ -693,6 +706,23 @@ describe("resolveSubagentModel", () => {
     )).toEqual({
       primary: "anthropic/claude-sonnet-4-6",
       fallbacks: ["openai/gpt-5.4"],
+    });
+  });
+
+  it("promotes the deploy-time model when the bundle primary provider is unavailable", () => {
+    const config = makeConfig({
+      inferenceProvider: "custom-endpoint",
+      modelEndpoint: "http://100.76.40.32:8000/v1",
+      modelEndpointModel: "google/gemma-4-26B-A4B-it",
+    });
+
+    expect(resolveSubagentModel(
+      { primary: "anthropic/claude-sonnet-4-6", fallbacks: ["openai/gpt-5.4"] },
+      "endpoint/google/gemma-4-26B-A4B-it",
+      config,
+    )).toEqual({
+      primary: "endpoint/google/gemma-4-26B-A4B-it",
+      fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4"],
     });
   });
 });

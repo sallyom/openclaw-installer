@@ -1,3 +1,5 @@
+import type { PodmanSecretMapping } from "../../../shared/podman-secrets.js";
+
 export type InferenceProvider =
   | "anthropic"
   | "openai"
@@ -74,6 +76,7 @@ export interface DeployFormConfig {
   agentDisplayName: string;
   image: string;
   containerRunArgs: string;
+  podmanSecretMappingsText: string;
   secretsProvidersJson: string;
   anthropicApiKeyRefSource: SecretRefSource;
   anthropicApiKeyRefProvider: string;
@@ -144,4 +147,5 @@ export interface DeployFormConfig {
   otelJaeger: boolean;
   otelEndpoint: string;
   otelExperimentId: string;
+  podmanSecretMappings?: PodmanSecretMapping[];
 }

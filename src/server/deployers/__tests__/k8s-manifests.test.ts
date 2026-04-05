@@ -222,6 +222,31 @@ describe("gateway env vars in proxy mode", () => {
     expect(secret.stringData?.TELEGRAM_BOT_TOKEN).toBe("123:abc");
   });
 
+  it("materializes custom env/default SecretRef ids into the backing Secret data", () => {
+    const config = makeConfig({
+      inferenceProvider: "openai",
+      openaiApiKey: "sk-oai-test",
+      openaiApiKeyRef: {
+        source: "env",
+        provider: "default",
+        id: "JOY_OPENAI_API_KEY",
+      },
+      telegramBotToken: "123:abc",
+      telegramBotTokenRef: {
+        source: "env",
+        provider: "default",
+        id: "JOY_TELEGRAM_BOT_TOKEN",
+      },
+    });
+
+    const secret = secretManifest("ns", config, "gateway-token");
+
+    expect(secret.stringData?.JOY_OPENAI_API_KEY).toBe("sk-oai-test");
+    expect(secret.stringData?.JOY_TELEGRAM_BOT_TOKEN).toBe("123:abc");
+    expect(secret.stringData?.OPENAI_API_KEY).toBeUndefined();
+    expect(secret.stringData?.TELEGRAM_BOT_TOKEN).toBeUndefined();
+  });
+
   it("excludes GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION when proxy is active", () => {
     const proxyConfig = makeConfig({
       inferenceProvider: "vertex-anthropic",
