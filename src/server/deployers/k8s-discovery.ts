@@ -42,7 +42,7 @@ async function loadSavedNamespaces(): Promise<string[]> {
   }
 }
 
-function derivePodInfo(pod: k8s.V1Pod): K8sPodInfo {
+export function derivePodInfo(pod: k8s.V1Pod): K8sPodInfo {
   const cs = pod.status?.containerStatuses?.[0];
   let containerStatus = "Unknown";
   let message = "";
@@ -82,7 +82,7 @@ function derivePodInfo(pod: k8s.V1Pod): K8sPodInfo {
   };
 }
 
-function deriveInstanceStatus(
+export function deriveInstanceStatus(
   replicas: number,
   readyReplicas: number,
   pods: K8sPodInfo[],
