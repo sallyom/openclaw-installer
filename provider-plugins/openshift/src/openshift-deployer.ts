@@ -87,7 +87,11 @@ export class OpenShiftDeployer implements Deployer {
             body: {
               apiVersion: "v1",
               kind: "Namespace",
-              metadata: { name: ns, labels: { "app.kubernetes.io/managed-by": "openclaw-installer" } },
+              metadata: { name: ns, labels: {
+                "app.kubernetes.io/managed-by": "openclaw-installer",
+                "pod-security.kubernetes.io/enforce": "privileged",
+                "pod-security.kubernetes.io/enforce-version": "latest",
+              } },
             },
           });
           log(`Namespace ${ns} created`);

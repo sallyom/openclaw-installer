@@ -181,6 +181,8 @@ export function a2aNamespacePatch(ns: string): k8s.V1Namespace {
       labels: {
         "app.kubernetes.io/managed-by": "openclaw-installer",
         "kagenti-enabled": "true",
+        "pod-security.kubernetes.io/enforce": "privileged",
+        "pod-security.kubernetes.io/enforce-version": "latest",
       },
     },
   };

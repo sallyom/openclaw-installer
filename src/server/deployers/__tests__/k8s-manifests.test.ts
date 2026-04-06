@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { deploymentManifest, fileConfigMapManifest, fileTreeConfigMapManifest, secretManifest } from "../k8s-manifests.js";
+import { a2aNamespacePatch } from "../k8s-a2a.js";
 import type { DeployConfig } from "../types.js";
 import type * as k8s from "@kubernetes/client-node";
 
@@ -221,5 +222,23 @@ describe("litellm sidecar env vars in proxy mode", () => {
     // Gateway routes to OpenAI/Anthropic directly
     expect(gwEnvNames).toContain("OPENAI_API_KEY");
     expect(gwEnvNames).toContain("ANTHROPIC_API_KEY");
+  });
+});
+
+// Regression test for #94: pod-security enforce label missing on A2A namespaces
+describe("a2a namespace patch pod-security labels", () => {
+  it("includes pod-security enforce labels for SPIFFE CSI volume support", () => {
+    const patch = a2aNamespacePatch("test-ns");
+    const labels = patch.metadata?.labels ?? {};
+
+    expect(labels["pod-security.kubernetes.io/enforce"]).toBe("privileged");
+    expect(labels["pod-security.kubernetes.io/enforce-version"]).toBe("latest");
+  });
+
+  it("preserves kagenti-enabled label alongside pod-security labels", () => {
+    const patch = a2aNamespacePatch("test-ns");
+    const labels = patch.metadata?.labels ?? {};
+
+    expect(labels["kagenti-enabled"]).toBe("true");
   });
 });
