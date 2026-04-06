@@ -1,10 +1,12 @@
 import * as k8s from "@kubernetes/client-node";
+import http from "node:http";
 import { join } from "node:path";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { v4 as uuid } from "uuid";
 import { coreApi, appsApi, loadKubeConfig, hasOtelOperator, k8sApiHttpCode } from "../services/k8s.js";
 import { ensureK8sPortForward } from "../services/k8s-port-forward.js";
+import { deriveInstanceStatus, derivePodInfo } from "./k8s-discovery.js";
 import { cronJobsFile, installerK8sInstanceDir, skillsDir } from "../paths.js";
 import { loadTextTree } from "../state-tree.js";
 import type {
@@ -112,6 +114,22 @@ async function applyResource<T>(
     await createFn();
   }
   log(`${name} applied`);
+}
+
+// ── Gateway readiness check ──────────────────────────────────────
+
+function checkGatewayReady(url: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const req = http.get(url, { timeout: 3000 }, (res) => {
+      res.resume();
+      resolve(res.statusCode !== undefined && res.statusCode < 500);
+    });
+    req.on("error", () => resolve(false));
+    req.on("timeout", () => {
+      req.destroy();
+      resolve(false);
+    });
+  });
 }
 
 // ── Deployer implementation ────────────────────────────────────────
@@ -505,19 +523,36 @@ export class KubernetesDeployer implements Deployer {
     const ns = result.config.namespace || result.containerId || "";
     try {
       const apps = appsApi();
+      const core = coreApi();
       const dep = await apps.readNamespacedDeployment({ name: "openclaw", namespace: ns });
-      const replicas = dep.status?.readyReplicas ?? 0;
-      const desired = dep.spec?.replicas ?? 1;
-      if (desired === 0) return { ...result, status: "stopped" };
-      if (replicas > 0) {
+      const replicas = dep.spec?.replicas ?? 1;
+      const readyReplicas = dep.status?.readyReplicas ?? 0;
+
+      if (replicas === 0) return { ...result, status: "stopped" };
+
+      // Fetch pods for accurate status derivation
+      const podList = await core.listNamespacedPod({
+        namespace: ns,
+        labelSelector: "app=openclaw",
+      });
+      const pods = podList.items.map(derivePodInfo);
+      const { status, statusDetail } = deriveInstanceStatus(replicas, readyReplicas, pods);
+
+      if (status === "running") {
         try {
           const { url } = await ensureK8sPortForward(ns);
-          return { ...result, status: "running", url };
+          // Verify the gateway is actually accepting HTTP connections
+          const ready = await checkGatewayReady(url);
+          if (ready) {
+            return { ...result, status: "running", url, statusDetail, pods };
+          }
+          return { ...result, status: "deploying", statusDetail: "Gateway starting...", pods };
         } catch {
-          return { ...result, status: "running" };
+          return { ...result, status: "running", statusDetail, pods };
         }
       }
-      return { ...result, status: "unknown" };
+
+      return { ...result, status, statusDetail, pods };
     } catch {
       return { ...result, status: "unknown" };
     }
