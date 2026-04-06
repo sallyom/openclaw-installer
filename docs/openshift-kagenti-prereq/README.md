@@ -43,6 +43,24 @@ If you intentionally want to track upstream instead of the pinned working ref:
 ./scripts/setup-kagenti.sh --kagenti-ref main
 ```
 
+## iptables Kernel Modules
+
+The Kagenti `proxy-init` init container uses `iptables-nft` to set up traffic
+interception rules. This requires the `xt_mark`, `xt_owner`, and `xt_REDIRECT`
+kernel modules, which are not loaded by default on RHCOS 9.
+
+The setup script applies a `MachineConfig` (`99-worker-kagenti-iptables-modules`)
+that creates `/etc/modules-load.d/kagenti-iptables.conf` on worker nodes so
+these modules are loaded persistently across reboots. This triggers a worker
+node rollout managed by the Machine Config Operator.
+
+To skip this step (e.g. if the modules are already loaded or on non-RHCOS
+nodes):
+
+```bash
+./scripts/setup-kagenti.sh --skip-iptables-modules
+```
+
 ## What The Script Sets Up
 
 It installs:

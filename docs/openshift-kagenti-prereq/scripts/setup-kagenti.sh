@@ -15,6 +15,7 @@
 #   ./scripts/setup-kagenti.sh --kagenti-ref main          # Track upstream main instead of pinned working ref
 #   ./scripts/setup-kagenti.sh --realm nerc                 # Custom Keycloak realm (default: kagenti)
 #   ./scripts/setup-kagenti.sh --skip-ovn-patch             # Skip OVN gateway patch
+#   ./scripts/setup-kagenti.sh --skip-iptables-modules      # Skip iptables kernel module MachineConfig
 #   ./scripts/setup-kagenti.sh --skip-mcp-gateway           # Skip MCP Gateway install
 #
 # Prerequisites:
@@ -42,6 +43,7 @@ CERT_MANAGER_NAMESPACE="${CERT_MANAGER_NAMESPACE:-cert-manager}"
 CERT_MANAGER_MODE="${CERT_MANAGER_MODE:-redhat-operator}"
 CERT_MANAGER_MANIFESTS_VERSION="${CERT_MANAGER_MANIFESTS_VERSION:-v1.18.4}"
 SKIP_OVN_PATCH=false
+SKIP_IPTABLES_MODULES=false
 SKIP_MCP_GATEWAY=false
 SKIP_UI=false
 MCP_GATEWAY_VERSION="0.5.1"
@@ -70,6 +72,7 @@ while [[ $# -gt 0 ]]; do
     --cert-manager-mode)  CERT_MANAGER_MODE="$2"; shift 2 ;;
     --cert-manager-version) CERT_MANAGER_MANIFESTS_VERSION="$2"; shift 2 ;;
     --skip-ovn-patch)     SKIP_OVN_PATCH=true; shift ;;
+    --skip-iptables-modules) SKIP_IPTABLES_MODULES=true; shift ;;
     --skip-mcp-gateway)   SKIP_MCP_GATEWAY=true; shift ;;
     --skip-ui)            SKIP_UI=true; shift ;;
     --mcp-gateway-version) MCP_GATEWAY_VERSION="$2"; shift 2 ;;
@@ -89,6 +92,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --cert-manager-version V  Upstream cert-manager version for manifests mode"
       echo "                            (default: $CERT_MANAGER_MANIFESTS_VERSION, or \$CERT_MANAGER_MANIFESTS_VERSION)"
       echo "  --skip-ovn-patch          Skip OVN gateway routing patch"
+      echo "  --skip-iptables-modules   Skip iptables kernel module MachineConfig"
       echo "  --skip-mcp-gateway        Skip MCP Gateway installation"
       echo "  --skip-ui                 Skip Kagenti UI and backend installation"
       echo "  --mcp-gateway-version VER MCP Gateway chart version (default: $MCP_GATEWAY_VERSION)"
@@ -273,9 +277,41 @@ fi
 echo ""
 
 # ============================================================================
-# Step 2: Detect Trust Domain
+# Step 2: Load iptables kernel modules for Kagenti proxy-init
 # ============================================================================
-log_info "Step 2: Detect trust domain"
+log_info "Step 2: iptables kernel modules (MachineConfig)"
+
+if $SKIP_IPTABLES_MODULES; then
+  log_info "Skipped (--skip-iptables-modules)"
+else
+  log_info "Applying MachineConfig to load xt_mark, xt_owner, xt_REDIRECT on worker nodes"
+  run_cmd $KUBECTL apply -f - <<'IPTABLES_MC_EOF'
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  labels:
+    machineconfiguration.openshift.io/role: worker
+  name: 99-worker-kagenti-iptables-modules
+spec:
+  config:
+    ignition:
+      version: 3.2.0
+    storage:
+      files:
+        - path: /etc/modules-load.d/kagenti-iptables.conf
+          mode: 0644
+          contents:
+            source: data:,xt_mark%0Axt_owner%0Axt_REDIRECT%0A
+IPTABLES_MC_EOF
+  log_success "MachineConfig 99-worker-kagenti-iptables-modules applied"
+  log_warn "Worker nodes will roll out with new MachineConfig — this may take several minutes"
+fi
+echo ""
+
+# ============================================================================
+# Step 3: Detect Trust Domain
+# ============================================================================
+log_info "Step 3: Detect trust domain"
 
 DOMAIN="apps.$($KUBECTL get dns cluster -o jsonpath='{ .spec.baseDomain }' 2>/dev/null || echo "")"
 if [ "$DOMAIN" = "apps." ] || [ -z "$DOMAIN" ]; then
@@ -287,9 +323,9 @@ log_success "Trust domain: $DOMAIN"
 echo ""
 
 # ============================================================================
-# Step 3: Install kagenti-deps
+# Step 4: Install kagenti-deps
 # ============================================================================
-log_info "Step 3: Install kagenti-deps"
+log_info "Step 4: Install kagenti-deps"
 
 # Pre-flight: ensure enableUserWorkload is set in cluster-monitoring-config.
 # The kagenti-deps chart has a kiali-operand hook that tries to REPLACE the entire
@@ -904,7 +940,7 @@ echo ""
 _bootstrap_cert_manager
 
 # ============================================================================
-# Step 3b: Istio multi-mesh shared trust via cert-manager
+# Step 4b: Istio multi-mesh shared trust via cert-manager
 # ============================================================================
 # Ported from kagenti Ansible installer (05_install_rhoai.yaml).
 #
@@ -1090,9 +1126,9 @@ _ensure_rhoai_shared_trust
 echo ""
 
 # ============================================================================
-# Step 4: Install Kagenti (Keycloak + operator + webhook + UI)
+# Step 5: Install Kagenti (Keycloak + operator + webhook + UI)
 # ============================================================================
-log_info "Step 4: Install Kagenti (Keycloak + operator + webhook + UI)"
+log_info "Step 5: Install Kagenti (Keycloak + operator + webhook + UI)"
 
 # Secrets file
 SECRETS_FILE="$KAGENTI_REPO/charts/kagenti/.secrets.yaml"
@@ -1186,17 +1222,17 @@ log_success "Kagenti installed"
 echo ""
 
 # ============================================================================
-# Step 5: Deploy Kagenti namespace controller
+# Step 6: Deploy Kagenti namespace controller
 # ============================================================================
-log_info "Step 5: Deploy Kagenti namespace controller"
+log_info "Step 6: Deploy Kagenti namespace controller"
 
 _deploy_kagenti_namespace_controller
 echo ""
 
 # ============================================================================
-# Step 6: Install MCP Gateway
+# Step 7: Install MCP Gateway
 # ============================================================================
-log_info "Step 6: Install MCP Gateway"
+log_info "Step 7: Install MCP Gateway"
 
 if $SKIP_MCP_GATEWAY; then
   log_info "Skipped (--skip-mcp-gateway)"
@@ -1211,9 +1247,9 @@ fi
 echo ""
 
 # ============================================================================
-# Step 7: Verify Helm releases
+# Step 8: Verify Helm releases
 # ============================================================================
-log_info "Step 7: Verify Helm releases"
+log_info "Step 8: Verify Helm releases"
 echo ""
 
 VERIFY_FAILED=false
@@ -1249,9 +1285,9 @@ if $VERIFY_FAILED; then
 fi
 
 # ============================================================================
-# Step 7: Show access info
+# Step 8: Show access info
 # ============================================================================
-log_info "Step 7: Access info"
+log_info "Step 8: Access info"
 echo ""
 
 log_info "Kagenti pods:"
