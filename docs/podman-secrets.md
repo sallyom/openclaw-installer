@@ -24,6 +24,23 @@ and injected at runtime as environment variables — they never touch the volume
 echo "ghp_yourtoken" | podman secret create gh_token -
 ```
 
+### Create a secret from an existing environment variable
+
+If you already have a provider key exported in your shell, create the Podman
+secret from that environment variable instead of retyping it:
+
+```bash
+printf '%s' "$ANTHROPIC_API_KEY" | podman secret create anthropic_api_key -
+printf '%s' "$OPENAI_API_KEY" | podman secret create openai_api_key -
+```
+
+This works well with the installer's **Podman secret mappings** field:
+
+```text
+anthropic_api_key=ANTHROPIC_API_KEY
+openai_api_key=OPENAI_API_KEY
+```
+
 ### Inject at container start
 
 Add `--secret` to the `podman run` command:
@@ -65,80 +82,18 @@ or backups. When moving to a new host, recreate secrets before starting the cont
 
 ---
 
-## Option 2: 1Password CLI exec Provider
+## Advanced External Providers
 
-For setups already using 1Password, the OpenClaw exec secrets provider can fetch
-credentials live from the 1Password vault. Nothing is stored on disk.
+OpenClaw also supports external `exec` secret providers, but those flows are
+bring-your-own runtime integrations rather than a tested local installer path.
 
-### Prerequisites
+For local installer deployments, the recommended and documented approach is:
 
-- 1Password desktop app installed and unlocked on the host
-- 1Password CLI installed: `brew install 1password-cli`
-- Desktop app integration enabled: Settings → Developer → Enable CLI integration
+- use Podman secrets for runtime injection
+- use OpenClaw `env/default/...` SecretRefs where needed
 
-### Store the credential in 1Password
-
-Create an item in your vault (e.g. "OpenClaw GitHub PAT") with a field named
-`credential` containing the token.
-
-### Mount the 1Password socket into the container
-
-```bash
--v /run/user/$(id -u)/1password/agent.sock:/run/1password/agent.sock \
--e OP_AGENT_SOCK=/run/1password/agent.sock
-```
-
-### Configure the OpenClaw exec provider
-
-```bash
-openclaw config set secrets.providers.onepassword \
-  --provider-source exec \
-  --provider-command op \
-  --provider-arg "op://Personal/OpenClaw GitHub PAT/credential" \
-  --provider-timeout-ms 5000
-```
-
-OpenClaw calls `op read` at session start. The resolved value is injected into the
-process environment and never written to disk. To rotate: update the item in 1Password.
-
----
-
-## Option 3: HashiCorp Vault exec Provider
-
-For setups using HashiCorp Vault, the same OpenClaw exec provider pattern applies.
-
-### Prerequisites
-
-- Vault CLI installed and authenticated (`vault login`)
-- Vault server accessible from the container
-
-### Mount Vault token into the container
-
-```bash
--e VAULT_ADDR=https://vault.example.com \
--e VAULT_TOKEN=<your-token>
-```
-
-Or mount a token file:
-
-```bash
--v ~/.vault-token:/home/node/.vault-token:ro
-```
-
-### Configure the OpenClaw exec provider
-
-```bash
-openclaw config set secrets.providers.vault \
-  --provider-source exec \
-  --provider-command vault \
-  --provider-arg kv \
-  --provider-arg get \
-  --provider-arg -field=value \
-  --provider-arg secret/openclaw/gh-token \
-  --provider-timeout-ms 5000
-```
-
----
+If you need an external provider such as Vault or 1Password, treat that as an
+advanced custom integration and validate it end to end in your own runtime.
 
 ## Naming Conventions
 
@@ -159,5 +114,3 @@ Use consistent secret names so scripts and docs are predictable:
 | Approach | Secret at rest? | Travels with volume backup? |
 |---|---|---|
 | Podman secrets | No (Podman store) | No |
-| 1Password exec provider | No (fetched live) | No |
-| HashiCorp Vault exec provider | No (fetched live) | No |
