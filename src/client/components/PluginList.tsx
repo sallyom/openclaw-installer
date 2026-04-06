@@ -19,7 +19,7 @@ interface PluginLoadError {
 
 const SOURCE_LABELS: Record<string, string> = {
   "built-in": "Built-in",
-  "provider-plugin": "Provider Plugin",
+  "provider-plugin": "Installer Provider Plugin",
   "npm": "NPM Package",
   "config": "Custom",
 };
@@ -86,8 +86,8 @@ export default function PluginList() {
       <div className="card">
         <h3>Registered Deployers</h3>
         <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)", marginBottom: "1rem" }}>
-          Deployer plugins provide deployment targets. Built-in deployers are always available.
-          Provider and third-party plugins can be enabled or disabled.
+          Installer provider plugins provide deployment targets. Built-in deployers are always available.
+          First-party and third-party installer provider plugins can be enabled or disabled.
         </p>
 
         {builtInPlugins.length > 0 && (

@@ -174,7 +174,7 @@ describe("PluginList", () => {
 
     await screen.findByText("This Machine");
     expect(screen.getAllByText("Built-in").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("Provider Plugin")).toBeTruthy();
+    expect(screen.getByText("Installer Provider Plugin")).toBeTruthy();
   });
 
   it("shows Superseded badge when plugin has supersededBy field", async () => {

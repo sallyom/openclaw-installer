@@ -32,10 +32,10 @@ We add a deployer plugin system that allows external npm packages to register ne
 - `detect` — optional async function that returns true if the platform is available
 - `priority` — numeric priority for auto-selection when multiple deployers detect availability
 
-**Provider plugins directory** — platform-specific deployers live in `provider-plugins/<name>/` within the installer repo itself. Each subdirectory is a self-contained plugin with its own source, templates, and documentation. This keeps platform-specific code isolated from the core while avoiding the coordination overhead of separate repositories.
+**Installer provider plugins directory** — platform-specific deployers live in `provider-plugins/<name>/` within the installer repo itself. Each subdirectory is a self-contained installer provider plugin with its own source, templates, and documentation. This keeps platform-specific code isolated from the core while avoiding the coordination overhead of separate repositories.
 
 **Plugin discovery** (`src/server/plugins/loader.ts`) — at startup, the installer loads plugins from:
-1. `provider-plugins/*/` directories in the installer repo (the primary mechanism)
+1. `provider-plugins/*/` directories in the installer repo (the primary mechanism for first-party installer provider plugins)
 2. npm packages matching `openclaw-installer-*` in node_modules (for third-party plugins)
 3. Entries in `~/.openclaw/installer/plugins.json` (for development or custom plugins)
 
@@ -67,7 +67,7 @@ We add a deployer plugin system that allows external npm packages to register ne
 
 ### Negative
 
-- The `Deployer` interface and exported helpers become a public API surface. Breaking changes require coordination with third-party plugin authors (first-party plugins in `provider-plugins/` can be updated in the same commit).
+- The `Deployer` interface and exported helpers become a public API surface. Breaking changes require coordination with third-party installer provider plugin authors (first-party plugins in `provider-plugins/` can be updated in the same commit).
 - Plugin loading adds a small amount of startup time (scanning directories and node_modules).
 - Plugins that wrap `KubernetesDeployer` are coupled to its internal behavior, which isn't formally versioned beyond semver on the package.
 

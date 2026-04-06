@@ -1,6 +1,6 @@
 # Development Setup
 
-How to work on the OpenShift provider plugin within openclaw-installer.
+How to work on the OpenShift installer provider plugin within openclaw-installer.
 
 ## Prerequisites
 
@@ -24,7 +24,7 @@ npm run dev
 You should see in the terminal output:
 ```
 Loading plugins...
-Loaded provider plugin: openshift
+Loaded installer provider plugin: openshift
 Plugins loaded. Registered deployers: local, kubernetes, openshift
 ```
 

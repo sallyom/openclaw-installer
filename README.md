@@ -51,14 +51,18 @@ Useful variants:
 | **OpenShift** | [deploy-openshift.md](provider-plugins/openshift/docs/deploy-openshift.md) | Extends Kubernetes with OAuth proxy sidecar, Route, and ServiceAccount. |
 | **Local (podman / docker)** | [deploy-local.md](docs/deploy-local.md) | Pulls the image, provisions your agent, starts a container on localhost. Works on macOS and Linux. |
 
-## Provider Plugins
+## Installer Provider Plugins
 
-Provider plugins extend the installer with platform-specific deployers. This repo supports two plugin paths:
+These are installer provider plugins, not OpenClaw runtime plugins.
 
-1. **In-repo provider plugins** in `provider-plugins/`
+They extend the installer with additional deployment targets such as OpenShift or other platform-specific deployers. This is not a ClawHub-style plugin marketplace, and the installer does not install arbitrary upstream OpenClaw plugins for you.
+
+This repo supports two plugin paths:
+
+1. **In-repo installer provider plugins** in `provider-plugins/`
 2. **External plugins** installed as npm packages and listed in `~/.openclaw/installer/plugins.json`
 
-In-repo provider plugins are loaded automatically at startup -- no extra install steps needed.
+In-repo installer provider plugins are loaded automatically at startup -- no extra install steps needed.
 
 | Plugin | Directory | Description |
 |--------|-----------|-------------|
@@ -66,15 +70,15 @@ In-repo provider plugins are loaded automatically at startup -- no extra install
 
 To deploy on OpenShift, just log in with `oc login` before starting the installer. The OpenShift option will appear automatically in the deploy form.
 
-### In-repo providers
+### In-repo installer provider plugins
 
 Anything under `provider-plugins/<name>/src/index.ts` is discovered by the server at startup. That is how the OpenShift plugin is activated in this repo.
 
 This is the preferred model for provider-specific deployers that ship with the main repository.
 
-### External providers
+### External installer provider plugins
 
-Third-party plugins can also be installed as npm packages. The loader discovers:
+Third-party installer provider plugins can also be installed as npm packages. The loader discovers:
 
 - unscoped packages named `openclaw-installer-*`
 - scoped packages whose package name starts with `openclaw-installer-`
@@ -84,7 +88,7 @@ Examples:
 - `openclaw-installer-aws`
 - `@acme/openclaw-installer-gke`
 
-You can activate external plugins by writing `~/.openclaw/installer/plugins.json` directly, or by using `run.sh`:
+You can activate external installer provider plugins by writing `~/.openclaw/installer/plugins.json` directly, or by using `run.sh`:
 
 ```bash
 ./run.sh --plugin @acme/openclaw-installer-aws
@@ -94,12 +98,14 @@ OPENCLAW_INSTALLER_PLUGINS=@acme/openclaw-installer-aws ./run.sh
 
 `run.sh` writes the requested package list to `~/.openclaw/installer/plugins.json`, which is then consumed by the server plugin loader on startup.
 
+These packages must implement the installer plugin `register()` contract and register deployers with the installer. Pointing this at a random OpenClaw plugin or ClawHub package will not work unless that package was specifically built as an installer provider plugin for `openclaw-installer`.
+
 ### Recommended provider strategy
 
 For this repo, the clean split is:
 
-- ship first-party providers as in-repo plugins under `provider-plugins/`
-- use external npm packages for optional or third-party providers
+- ship first-party installer provider plugins under `provider-plugins/`
+- use external npm packages for optional or third-party installer provider plugins
 
 That keeps the installer startup generic. Users start the same installer, and the available deployers come from the loaded plugins.
 

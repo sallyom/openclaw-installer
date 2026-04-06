@@ -12,7 +12,7 @@ For plain Kubernetes deployments (without OAuth proxy, Route, and ServiceAccount
 
 **Storage:** OpenClaw uses SQLite, which requires POSIX file locking. Block storage classes (gp3-csi, managed-csi, thin-csi) work. Avoid NFS.
 
-## Install the Plugin
+## Install the Installer Provider Plugin
 
 The OpenShift plugin is included in the `provider-plugins/openshift/` directory and is loaded automatically by the installer's plugin loader. No separate installation is needed.
 
