@@ -10,7 +10,7 @@ let _kc: k8s.KubeConfig | null = null;
 export function loadKubeConfig(): k8s.KubeConfig {
   if (_kc) return _kc;
   const kc = new k8s.KubeConfig();
-  kc.loadFromDefault();
+  kc.loadFromDefault({ onInvalidEntry: "filter" });
   _kc = kc;
   return kc;
 }
