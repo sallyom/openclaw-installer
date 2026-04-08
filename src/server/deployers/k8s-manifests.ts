@@ -159,6 +159,10 @@ export function secretManifest(ns: string, config: DeployConfig, gatewayToken: s
   if (config.openaiApiKey && openaiEnvRefId) {
     data[openaiEnvRefId] = config.openaiApiKey;
   }
+  const googleEnvRefId = resolveEnvSecretRefId(config.googleApiKeyRef, "GEMINI_API_KEY");
+  if (config.googleApiKey && googleEnvRefId) {
+    data[googleEnvRefId] = config.googleApiKey;
+  }
   const openrouterEnvRefId = resolveEnvSecretRefId(config.openrouterApiKeyRef, "OPENROUTER_API_KEY");
   if (config.openrouterApiKey && openrouterEnvRefId) {
     data[openrouterEnvRefId] = config.openrouterApiKey;

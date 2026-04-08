@@ -39,6 +39,8 @@ import { agentWorkspaceDir, installerLocalInstanceDir, openclawHomeDir } from ".
 import {
   buildConfiguredAgentModelCatalog,
   CUSTOM_ENDPOINT_PROVIDER,
+  GOOGLE_BASE_URL,
+  GOOGLE_PROVIDER,
   OPENROUTER_BASE_URL,
   OPENROUTER_PROVIDER,
   detectUnavailableProvider,
@@ -203,6 +205,9 @@ export function buildSavedInstanceEnvContent(config: DeployConfig, name: string)
   if (config.openaiApiKeyRef) {
     lines.push(`OPENAI_API_KEY_REF_B64=${encodeEnvValue(JSON.stringify(config.openaiApiKeyRef))}`);
   }
+  if (config.googleApiKeyRef) {
+    lines.push(`GOOGLE_API_KEY_REF_B64=${encodeEnvValue(JSON.stringify(config.googleApiKeyRef))}`);
+  }
   if (config.openrouterApiKeyRef) {
     lines.push(`OPENROUTER_API_KEY_REF_B64=${encodeEnvValue(JSON.stringify(config.openrouterApiKeyRef))}`);
   }
@@ -219,6 +224,9 @@ export function buildSavedInstanceEnvContent(config: DeployConfig, name: string)
   if (config.openaiApiKey && (!config.openaiApiKeyRef || usesDefaultEnvSecretRef(config.openaiApiKeyRef))) {
     lines.push(`OPENAI_API_KEY=${config.openaiApiKey}`);
   }
+  if (config.googleApiKey && (!config.googleApiKeyRef || usesDefaultEnvSecretRef(config.googleApiKeyRef))) {
+    lines.push(`GEMINI_API_KEY=${config.googleApiKey}`);
+  }
   if (config.openrouterApiKey && (!config.openrouterApiKeyRef || usesDefaultEnvSecretRef(config.openrouterApiKeyRef))) {
     lines.push(`OPENROUTER_API_KEY=${config.openrouterApiKey}`);
   }
@@ -228,8 +236,14 @@ export function buildSavedInstanceEnvContent(config: DeployConfig, name: string)
   if (config.openaiModel) {
     lines.push(`OPENAI_MODEL=${config.openaiModel}`);
   }
+  if (config.googleModel) {
+    lines.push(`GOOGLE_MODEL=${config.googleModel}`);
+  }
   if (config.openrouterModel) {
     lines.push(`OPENROUTER_MODEL=${config.openrouterModel}`);
+  }
+  if (config.googleModels && config.googleModels.length > 0) {
+    lines.push(`GOOGLE_MODELS_B64=${encodeEnvValue(JSON.stringify(config.googleModels))}`);
   }
   if (config.openrouterModels && config.openrouterModels.length > 0) {
     lines.push(`OPENROUTER_MODELS_B64=${encodeEnvValue(JSON.stringify(config.openrouterModels))}`);
@@ -409,6 +423,9 @@ function deriveModel(config: DeployConfig): string {
   if (config.inferenceProvider === "openai") {
     return `openai/${config.openaiModel?.trim() || "gpt-5.4"}`;
   }
+  if (config.inferenceProvider === GOOGLE_PROVIDER) {
+    return `${GOOGLE_PROVIDER}/${config.googleModel?.trim() || "gemini-3.1-pro-preview"}`;
+  }
   if (config.inferenceProvider === OPENROUTER_PROVIDER) {
     return normalizeModelRef(config, config.openrouterModel?.trim() || "auto");
   }
@@ -435,6 +452,9 @@ function deriveModel(config: DeployConfig): string {
   }
   if (config.openaiApiKey || config.openaiApiKeyRef) {
     return "openai/gpt-5.4";
+  }
+  if (config.googleApiKey || config.googleApiKeyRef) {
+    return `${GOOGLE_PROVIDER}/gemini-3.1-pro-preview`;
   }
   if (config.openrouterApiKey || config.openrouterApiKeyRef) {
     return `${OPENROUTER_PROVIDER}/auto`;
@@ -497,6 +517,24 @@ function envSecretRef(id: string): DeploySecretRef {
   };
 }
 
+function resolveLocalGoogleEnvId(config: DeployConfig): string | undefined {
+  const explicitRefId = hasSecretRef(config.googleApiKeyRef)
+    && config.googleApiKeyRef.source === "env"
+    && config.googleApiKeyRef.provider === "default"
+    ? config.googleApiKeyRef.id.trim()
+    : undefined;
+  if (explicitRefId) {
+    return explicitRefId;
+  }
+  if (hasPodmanSecretTarget(config.podmanSecretMappings, "GEMINI_API_KEY")) {
+    return "GEMINI_API_KEY";
+  }
+  if (hasPodmanSecretTarget(config.podmanSecretMappings, "GOOGLE_API_KEY")) {
+    return "GOOGLE_API_KEY";
+  }
+  return config.googleApiKey?.trim() ? "GEMINI_API_KEY" : undefined;
+}
+
 async function withActivePodmanSecretMappings(
   config: DeployConfig,
   runtime: ContainerRuntime,
@@ -552,6 +590,12 @@ function attachSecretHandlingConfig(ocConfig: Record<string, unknown>, config: D
     : shouldAutoInjectedEnvRef(config, config.openaiApiKeyRef, config.openaiApiKey, "OPENAI_API_KEY")
       ? envSecretRef("OPENAI_API_KEY")
       : undefined;
+  const googleEnvId = resolveLocalGoogleEnvId(config);
+  const googleApiKeyRef = hasSecretRef(config.googleApiKeyRef)
+    ? config.googleApiKeyRef
+    : googleEnvId
+      ? envSecretRef(googleEnvId)
+      : undefined;
   const openrouterApiKeyRef = hasSecretRef(config.openrouterApiKeyRef)
     ? config.openrouterApiKeyRef
     : shouldAutoInjectedEnvRef(config, config.openrouterApiKeyRef, config.openrouterApiKey, "OPENROUTER_API_KEY")
@@ -568,6 +612,32 @@ function attachSecretHandlingConfig(ocConfig: Record<string, unknown>, config: D
     if (openaiApiKeyRef.source === "env" && openaiApiKeyRef.provider === "default") {
       shouldDefineDefaultEnvProvider = true;
     }
+  }
+  if (googleApiKeyRef) {
+    if (googleApiKeyRef.source === "env" && googleApiKeyRef.provider === "default") {
+      shouldDefineDefaultEnvProvider = true;
+    }
+    const googleProvider: Record<string, unknown> = {
+      ...((providersMap[GOOGLE_PROVIDER] as Record<string, unknown> | undefined) || {}),
+      baseUrl: GOOGLE_BASE_URL,
+      api: "google-generative-ai",
+      apiKey: cloneSecretRef(googleApiKeyRef),
+    };
+    const googleModels = new Map<string, { id: string; name: string }>();
+    const addGoogleModel = (modelId?: string) => {
+      const trimmed = String(modelId || "").trim();
+      if (!trimmed) return;
+      const id = trimmed.startsWith(`${GOOGLE_PROVIDER}/`) ? trimmed.slice(`${GOOGLE_PROVIDER}/`.length) : trimmed;
+      googleModels.set(id, { id, name: id });
+    };
+    addGoogleModel(config.googleModel || "gemini-3.1-pro-preview");
+    for (const modelId of config.googleModels || []) {
+      addGoogleModel(modelId);
+    }
+    if (googleModels.size > 0) {
+      googleProvider.models = Array.from(googleModels.values());
+    }
+    providersMap[GOOGLE_PROVIDER] = googleProvider;
   }
   if (modelEndpointApiKeyRef) {
     shouldDefineDefaultEnvProvider = true;
@@ -942,7 +1012,7 @@ function runCommand(
   return new Promise((resolve, reject) => {
     const redacted = args.map((a, i) =>
       args[i - 1] === "-e" &&
-      /^(ANTHROPIC_API_KEY|OPENAI_API_KEY|TELEGRAM_BOT_TOKEN|SSH_IDENTITY|SSH_CERTIFICATE|SSH_KNOWN_HOSTS)=/.test(
+      /^(ANTHROPIC_API_KEY|OPENAI_API_KEY|GEMINI_API_KEY|GOOGLE_API_KEY|TELEGRAM_BOT_TOKEN|SSH_IDENTITY|SSH_CERTIFICATE|SSH_KNOWN_HOSTS)=/.test(
         a,
       )
         ? a.replace(/=[\s\S]*/, "=***")
@@ -1052,6 +1122,10 @@ function buildRunArgs(
   const openaiEnvRefId = resolveEnvSecretRefId(effectiveConfig.openaiApiKeyRef, "OPENAI_API_KEY");
   if (effectiveConfig.openaiApiKey && openaiEnvRefId) {
     env[openaiEnvRefId] = effectiveConfig.openaiApiKey;
+  }
+  const googleEnvRefId = resolveEnvSecretRefId(effectiveConfig.googleApiKeyRef, resolveLocalGoogleEnvId(effectiveConfig) || "GEMINI_API_KEY");
+  if (effectiveConfig.googleApiKey && googleEnvRefId) {
+    env[googleEnvRefId] = effectiveConfig.googleApiKey;
   }
   const openrouterEnvRefId = resolveEnvSecretRefId(effectiveConfig.openrouterApiKeyRef, "OPENROUTER_API_KEY");
   if (effectiveConfig.openrouterApiKey && openrouterEnvRefId) {

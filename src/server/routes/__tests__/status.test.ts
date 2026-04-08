@@ -32,10 +32,14 @@ function parseEnvFile(text: string): Record<string, string> {
 describe("parseSavedLocalInstanceConfig", () => {
   it("restores saved SecretRefs and Podman secret mappings", () => {
     const config = makeConfig({
-      inferenceProvider: "openrouter",
+      inferenceProvider: "google",
+      googleApiKeyRef: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
+      googleModel: "gemini-3.1-pro-preview",
+      googleModels: ["gemini-2.5-flash"],
       openrouterApiKeyRef: { source: "env", provider: "default", id: "OPENROUTER_API_KEY" },
       modelEndpointApiKeyRef: { source: "file", provider: "vault", id: "/providers/model-endpoint/apiKey" },
       podmanSecretMappings: [
+        { secretName: "gemini_api_key", targetEnv: "GEMINI_API_KEY" },
         { secretName: "openrouter_api_key", targetEnv: "OPENROUTER_API_KEY" },
       ],
     });
@@ -43,6 +47,13 @@ describe("parseSavedLocalInstanceConfig", () => {
     const savedVars = parseEnvFile(buildSavedInstanceEnvContent(config, "openclaw-demo"));
     const parsed = parseSavedLocalInstanceConfig(savedVars);
 
+    expect(parsed.googleApiKeyRef).toEqual({
+      source: "env",
+      provider: "default",
+      id: "GEMINI_API_KEY",
+    });
+    expect(parsed.googleModel).toBe("gemini-3.1-pro-preview");
+    expect(parsed.googleModels).toEqual(["gemini-2.5-flash"]);
     expect(parsed.openrouterApiKeyRef).toEqual({
       source: "env",
       provider: "default",
@@ -54,6 +65,7 @@ describe("parseSavedLocalInstanceConfig", () => {
       id: "/providers/model-endpoint/apiKey",
     });
     expect(parsed.podmanSecretMappings).toEqual([
+      { secretName: "gemini_api_key", targetEnv: "GEMINI_API_KEY" },
       { secretName: "openrouter_api_key", targetEnv: "OPENROUTER_API_KEY" },
     ]);
   });

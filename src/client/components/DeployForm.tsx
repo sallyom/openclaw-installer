@@ -189,6 +189,8 @@ export default function DeployForm({ onDeployStarted }: DeployFormProps) {
             setInferenceProvider("openrouter");
           } else if (d.hasOpenaiKey && !d.hasAnthropicKey) {
             setInferenceProvider("openai");
+          } else if (d.hasGoogleKey && !d.hasAnthropicKey && !d.hasOpenaiKey && !d.hasOpenrouterKey) {
+            setInferenceProvider("google");
           }
           if (d.image) {
             setConfig((prev) => ({ ...prev, image: d.image }));
@@ -597,6 +599,7 @@ export default function DeployForm({ onDeployStarted }: DeployFormProps) {
         suggestedNamespace,
         anthropicApiKeyRef,
         openaiApiKeyRef,
+        googleApiKeyRef,
         openrouterApiKeyRef,
         modelEndpointApiKeyRef,
         telegramBotTokenRef,
@@ -627,6 +630,7 @@ export default function DeployForm({ onDeployStarted }: DeployFormProps) {
       suggestedNamespace,
       anthropicApiKeyRef,
       openaiApiKeyRef,
+      googleApiKeyRef,
       openrouterApiKeyRef,
       modelEndpointApiKeyRef,
       telegramBotTokenRef,
@@ -660,6 +664,11 @@ export default function DeployForm({ onDeployStarted }: DeployFormProps) {
     config.openaiApiKeyRefSource,
     config.openaiApiKeyRefProvider,
     config.openaiApiKeyRefId,
+  );
+  const googleApiKeyRef = buildSecretRef(
+    config.googleApiKeyRefSource,
+    config.googleApiKeyRefProvider,
+    config.googleApiKeyRefId,
   );
   const openrouterApiKeyRef = buildSecretRef(
     config.openrouterApiKeyRefSource,
@@ -695,6 +704,17 @@ export default function DeployForm({ onDeployStarted }: DeployFormProps) {
     )
       ? { source: "env", provider: "default", id: "OPENAI_API_KEY" as const }
       : undefined
+    : undefined;
+  const inferredGoogleApiKeyRef = !googleApiKeyRef
+    ? (() => {
+      const mappedTargetEnv = podmanSecretMappingsParse.mappings.find((mapping) =>
+        mapping.targetEnv === "GEMINI_API_KEY" || mapping.targetEnv === "GOOGLE_API_KEY",
+      )?.targetEnv;
+      const inferredId = mappedTargetEnv || (config.googleApiKey.trim() ? "GEMINI_API_KEY" : "");
+      return inferredId
+        ? { source: "env", provider: "default", id: inferredId as "GEMINI_API_KEY" | "GOOGLE_API_KEY" }
+        : undefined;
+    })()
     : undefined;
   const inferredOpenrouterApiKeyRef = !openrouterApiKeyRef
     ? (
@@ -748,6 +768,9 @@ export default function DeployForm({ onDeployStarted }: DeployFormProps) {
   }
   if (config.openaiApiKeyRefId.trim() && !openaiApiKeyRef) {
     validationErrors.push("OpenAI SecretRef requires source, provider, and id.");
+  }
+  if (config.googleApiKeyRefId.trim() && !googleApiKeyRef) {
+    validationErrors.push("Google SecretRef requires source, provider, and id.");
   }
   if (config.openrouterApiKeyRefId.trim() && !openrouterApiKeyRef) {
     validationErrors.push("OpenRouter SecretRef requires source, provider, and id.");
@@ -1332,10 +1355,12 @@ export default function DeployForm({ onDeployStarted }: DeployFormProps) {
           mode={mode}
           effectiveAnthropicApiKeyRef={anthropicApiKeyRef || inferredAnthropicApiKeyRef}
           effectiveOpenaiApiKeyRef={openaiApiKeyRef || inferredOpenaiApiKeyRef}
+          effectiveGoogleApiKeyRef={googleApiKeyRef || inferredGoogleApiKeyRef}
           effectiveOpenrouterApiKeyRef={openrouterApiKeyRef || inferredOpenrouterApiKeyRef}
           effectiveModelEndpointApiKeyRef={modelEndpointApiKeyRef || inferredModelEndpointApiKeyRef}
           anthropicApiKeyRefIsInferred={!anthropicApiKeyRef && Boolean(inferredAnthropicApiKeyRef)}
           openaiApiKeyRefIsInferred={!openaiApiKeyRef && Boolean(inferredOpenaiApiKeyRef)}
+          googleApiKeyRefIsInferred={!googleApiKeyRef && Boolean(inferredGoogleApiKeyRef)}
           openrouterApiKeyRefIsInferred={!openrouterApiKeyRef && Boolean(inferredOpenrouterApiKeyRef)}
           modelEndpointApiKeyRefIsInferred={!modelEndpointApiKeyRef && Boolean(inferredModelEndpointApiKeyRef)}
         />

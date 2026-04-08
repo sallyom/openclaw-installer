@@ -47,6 +47,8 @@ interface AdditionalProvider {
   provider: InferenceProvider | "";
 }
 
+type ProviderModelOption = { id: string; name: string };
+
 const LABEL_STYLE: React.CSSProperties = {
   fontSize: "0.75rem",
   color: "var(--text-secondary)",
@@ -60,6 +62,66 @@ function secretInputPreferenceHint(mode: string): string {
     return "Prefer Podman secret mappings and SecretRefs for local deploys. Leave this blank when the key is injected via Podman secrets.";
   }
   return "Optional. If provided here, the installer stores it in the managed Kubernetes Secret. Leave this blank when using an external SecretRef provider.";
+}
+
+const CURATED_MODEL_OPTIONS: Partial<Record<InferenceProvider, Array<{ id: string; name: string }>>> = {
+  anthropic: [
+    { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+    { id: "claude-opus-4-6", name: "Claude Opus 4.6" },
+    { id: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
+  ],
+  openai: [
+    { id: "gpt-5", name: "GPT-5" },
+    { id: "gpt-5.4", name: "GPT-5.4" },
+    { id: "gpt-5-mini", name: "GPT-5 Mini" },
+  ],
+  google: [
+    { id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro Preview" },
+    { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
+    { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash" },
+  ],
+};
+
+function formatModelOptionLabel(option: ProviderModelOption): string {
+  return option.name === option.id ? option.id : `${option.name} (${option.id})`;
+}
+
+function getModelSelectValue(model: string, options: ProviderModelOption[]): string {
+  const trimmedModel = model.trim();
+  if (!trimmedModel) {
+    return "";
+  }
+  return options.some((option) => option.id === trimmedModel) ? trimmedModel : "__custom__";
+}
+
+function getCustomModelOptionLabel(model: string, options: ProviderModelOption[]): string {
+  const trimmedModel = model.trim();
+  if (trimmedModel && !options.some((option) => option.id === trimmedModel)) {
+    return `Custom: ${trimmedModel}`;
+  }
+  return "Custom model ID...";
+}
+
+function applyProviderDefaultModel(
+  prev: DeployFormConfig,
+  provider: InferenceProvider,
+): DeployFormConfig {
+  switch (provider) {
+    case "anthropic":
+      return prev.anthropicModel.trim() ? prev : { ...prev, anthropicModel: MODEL_DEFAULTS.anthropic };
+    case "openai":
+      return prev.openaiModel.trim() ? prev : { ...prev, openaiModel: MODEL_DEFAULTS.openai.replace(/^openai\//, "") };
+    case "google":
+      return prev.googleModel.trim() ? prev : { ...prev, googleModel: MODEL_DEFAULTS.google.replace(/^google\//, "") };
+    case "openrouter":
+      return prev.openrouterModel.trim() ? prev : { ...prev, openrouterModel: MODEL_DEFAULTS.openrouter };
+    case "vertex-anthropic":
+      return prev.vertexAnthropicModel.trim() ? prev : { ...prev, vertexAnthropicModel: "claude-sonnet-4-6" };
+    case "vertex-google":
+      return prev.vertexGoogleModel.trim() ? prev : { ...prev, vertexGoogleModel: "gemini-2.5-pro" };
+    default:
+      return prev;
+  }
 }
 
 export function ProviderSection({
@@ -116,13 +178,23 @@ export function ProviderSection({
     setAdditionalProviders((prev) =>
       prev.map((ap) => (ap.id === id ? { ...ap, provider } : ap)),
     );
+    if (!provider) {
+      return;
+    }
+    setConfig((prev) => applyProviderDefaultModel(prev, provider));
   }
 
   function renderProviderFields(provider: InferenceProvider | "") {
     if (!provider) return null;
 
     switch (provider) {
-      case "anthropic":
+      case "anthropic": {
+        const visibleAnthropicOptions = anthropicModelOptions.length > 0
+          ? anthropicModelOptions
+          : CURATED_MODEL_OPTIONS.anthropic || [];
+        const additionalAnthropicOptions = visibleAnthropicOptions.filter(
+          (option) => option.id !== config.anthropicModel,
+        );
         return (
           <>
             <div className="form-group">
@@ -151,39 +223,33 @@ export function ProviderSection({
               {anthropicModelsError && (
                 <div className="hint" style={{ color: "#e74c3c" }}>{anthropicModelsError}</div>
               )}
-              {anthropicModelOptions.length > 0 && (
-                <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", marginBottom: "0.5rem", maxHeight: "150px", overflowY: "auto", border: "1px solid var(--border)", borderRadius: "6px", padding: "0.5rem" }}>
-                  {anthropicModelOptions.map((option) => {
-                    const isSelected = config.anthropicModel === option.id || config.anthropicModels.includes(option.id);
-                    return (
-                      <label key={option.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.85rem", cursor: "pointer" }}>
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => {
-                            setConfig((prev) => {
-                              if (isSelected) {
-                                // Unchecking: remove from primary or additional
-                                if (prev.anthropicModel === option.id) {
-                                  return { ...prev, anthropicModel: "" };
-                                }
-                                return { ...prev, anthropicModels: prev.anthropicModels.filter((m) => m !== option.id) };
-                              }
-                              // Checking: if no primary set, use as primary; otherwise add to additional
-                              if (!prev.anthropicModel.trim()) {
-                                return { ...prev, anthropicModel: option.id };
-                              }
-                              return { ...prev, anthropicModels: [...prev.anthropicModels, option.id] };
-                            });
-                          }}
-                          style={{ width: "auto" }}
-                        />
-                        <code>{option.id}</code>
-                        {option.name !== option.id && <span style={{ color: "var(--text-secondary)" }}>({option.name})</span>}
-                        {config.anthropicModel === option.id && <span style={{ color: "var(--text-secondary)", fontStyle: "italic" }}>(primary)</span>}
-                      </label>
-                    );
-                  })}
+              {visibleAnthropicOptions.length > 0 && (
+                <select
+                  value={getModelSelectValue(config.anthropicModel, visibleAnthropicOptions)}
+                  onChange={(e) => {
+                    if (e.target.value === "__custom__") {
+                      if (visibleAnthropicOptions.some((option) => option.id === config.anthropicModel)) {
+                        update("anthropicModel", "");
+                      }
+                      return;
+                    }
+                    update("anthropicModel", e.target.value);
+                  }}
+                >
+                  <option value="">Select a model...</option>
+                  {visibleAnthropicOptions.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {formatModelOptionLabel(option)}
+                    </option>
+                  ))}
+                  <option value="__custom__">
+                    {getCustomModelOptionLabel(config.anthropicModel, visibleAnthropicOptions)}
+                  </option>
+                </select>
+              )}
+              {anthropicModelOptions.length === 0 && (
+                <div className="hint" style={{ marginBottom: "0.5rem" }}>
+                  Showing curated Anthropic models. Enter an API key in the form or expose one in server env for a live model list.
                 </div>
               )}
               <input
@@ -193,11 +259,34 @@ export function ProviderSection({
                 onChange={(e) => update("anthropicModel", e.target.value)}
               />
               <div className="hint">
-                Primary model used as the default in the OpenClaw model picker as <code>anthropic/&lt;model&gt;</code>.
+                Use the dropdown or enter a custom Anthropic model ID. The primary model is used as <code>anthropic/&lt;model&gt;</code>.
               </div>
             </div>
             <div className="form-group">
               <label>Additional Models</label>
+              {additionalAnthropicOptions.length > 0 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", marginBottom: "0.5rem", maxHeight: "150px", overflowY: "auto", border: "1px solid var(--border)", borderRadius: "6px", padding: "0.5rem" }}>
+                  {additionalAnthropicOptions.map((option) => (
+                    <label key={option.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.85rem", cursor: "pointer" }}>
+                      <input
+                        type="checkbox"
+                        checked={config.anthropicModels.includes(option.id)}
+                        onChange={() => {
+                          setConfig((prev) => ({
+                            ...prev,
+                            anthropicModels: prev.anthropicModels.includes(option.id)
+                              ? prev.anthropicModels.filter((model) => model !== option.id)
+                              : [...prev.anthropicModels, option.id],
+                          }));
+                        }}
+                        style={{ width: "auto" }}
+                      />
+                      <code>{option.id}</code>
+                      {option.name !== option.id && <span style={{ color: "var(--text-secondary)" }}>({option.name})</span>}
+                    </label>
+                  ))}
+                </div>
+              )}
               {config.anthropicModels.map((modelId, index) => (
                 <div key={index} style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginBottom: "0.25rem" }}>
                   <input
@@ -247,8 +336,15 @@ export function ProviderSection({
             </div>
           </>
         );
+      }
 
-      case "openai":
+      case "openai": {
+        const visibleOpenaiOptions = openaiModelOptions.length > 0
+          ? openaiModelOptions
+          : CURATED_MODEL_OPTIONS.openai || [];
+        const additionalOpenaiOptions = visibleOpenaiOptions.filter(
+          (option) => option.id !== config.openaiModel,
+        );
         return (
           <>
             <div className="form-group">
@@ -277,36 +373,33 @@ export function ProviderSection({
               {openaiModelsError && (
                 <div className="hint" style={{ color: "#e74c3c" }}>{openaiModelsError}</div>
               )}
-              {openaiModelOptions.length > 0 && (
-                <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", marginBottom: "0.5rem", maxHeight: "150px", overflowY: "auto", border: "1px solid var(--border)", borderRadius: "6px", padding: "0.5rem" }}>
-                  {openaiModelOptions.map((option) => {
-                    const isSelected = config.openaiModel === option.id || config.openaiModels.includes(option.id);
-                    return (
-                      <label key={option.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.85rem", cursor: "pointer" }}>
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => {
-                            setConfig((prev) => {
-                              if (isSelected) {
-                                if (prev.openaiModel === option.id) {
-                                  return { ...prev, openaiModel: "" };
-                                }
-                                return { ...prev, openaiModels: prev.openaiModels.filter((m) => m !== option.id) };
-                              }
-                              if (!prev.openaiModel.trim()) {
-                                return { ...prev, openaiModel: option.id };
-                              }
-                              return { ...prev, openaiModels: [...prev.openaiModels, option.id] };
-                            });
-                          }}
-                          style={{ width: "auto" }}
-                        />
-                        <code>{option.id}</code>
-                        {config.openaiModel === option.id && <span style={{ color: "var(--text-secondary)", fontStyle: "italic" }}>(primary)</span>}
-                      </label>
-                    );
-                  })}
+              {visibleOpenaiOptions.length > 0 && (
+                <select
+                  value={getModelSelectValue(config.openaiModel, visibleOpenaiOptions)}
+                  onChange={(e) => {
+                    if (e.target.value === "__custom__") {
+                      if (visibleOpenaiOptions.some((option) => option.id === config.openaiModel)) {
+                        update("openaiModel", "");
+                      }
+                      return;
+                    }
+                    update("openaiModel", e.target.value);
+                  }}
+                >
+                  <option value="">Select a model...</option>
+                  {visibleOpenaiOptions.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {formatModelOptionLabel(option)}
+                    </option>
+                  ))}
+                  <option value="__custom__">
+                    {getCustomModelOptionLabel(config.openaiModel, visibleOpenaiOptions)}
+                  </option>
+                </select>
+              )}
+              {openaiModelOptions.length === 0 && (
+                <div className="hint" style={{ marginBottom: "0.5rem" }}>
+                  Showing curated OpenAI models. Enter an API key in the form or expose one in server env for a live model list.
                 </div>
               )}
               <input
@@ -316,11 +409,33 @@ export function ProviderSection({
                 onChange={(e) => update("openaiModel", e.target.value)}
               />
               <div className="hint">
-                Primary model used as the default in the OpenClaw model picker as <code>openai/&lt;model&gt;</code>.
+                Use the dropdown or enter a custom OpenAI model ID. The primary model is used as <code>openai/&lt;model&gt;</code>.
               </div>
             </div>
             <div className="form-group">
               <label>Additional Models</label>
+              {additionalOpenaiOptions.length > 0 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", marginBottom: "0.5rem", maxHeight: "150px", overflowY: "auto", border: "1px solid var(--border)", borderRadius: "6px", padding: "0.5rem" }}>
+                  {additionalOpenaiOptions.map((option) => (
+                    <label key={option.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.85rem", cursor: "pointer" }}>
+                      <input
+                        type="checkbox"
+                        checked={config.openaiModels.includes(option.id)}
+                        onChange={() => {
+                          setConfig((prev) => ({
+                            ...prev,
+                            openaiModels: prev.openaiModels.includes(option.id)
+                              ? prev.openaiModels.filter((model) => model !== option.id)
+                              : [...prev.openaiModels, option.id],
+                          }));
+                        }}
+                        style={{ width: "auto" }}
+                      />
+                      <code>{option.id}</code>
+                    </label>
+                  ))}
+                </div>
+              )}
               {config.openaiModels.map((modelId, index) => (
                 <div key={index} style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginBottom: "0.25rem" }}>
                   <input
@@ -370,6 +485,147 @@ export function ProviderSection({
             </div>
           </>
         );
+      }
+
+      case "google": {
+        const visibleGoogleOptions = CURATED_MODEL_OPTIONS.google || [];
+        const additionalGoogleOptions = visibleGoogleOptions.filter(
+          (option) => option.id !== config.googleModel,
+        );
+        return (
+          <>
+            <div className="form-group">
+              <label>Google API Key</label>
+              <input
+                type="password"
+                autoComplete="new-password"
+                placeholder={defaults?.hasGoogleKey ? "(using key from environment)" : "AIza..."}
+                value={config.googleApiKey}
+                onChange={(e) => update("googleApiKey", e.target.value)}
+              />
+              <div className="hint">
+                {defaults?.hasGoogleKey
+                  ? "Detected GEMINI_API_KEY or GOOGLE_API_KEY from server environment — leave blank to use it"
+                  : "Direct Gemini access via Google AI Studio or the Gemini Developer API."}
+              </div>
+              <div className="hint" style={{ marginTop: "0.35rem" }}>
+                {secretInputPreferenceHint(mode)}
+              </div>
+            </div>
+            <div className="form-group">
+              <label>Google Model</label>
+              {visibleGoogleOptions.length > 0 && (
+                <select
+                  value={getModelSelectValue(config.googleModel, visibleGoogleOptions)}
+                  onChange={(e) => {
+                    if (e.target.value === "__custom__") {
+                      if (visibleGoogleOptions.some((option) => option.id === config.googleModel)) {
+                        update("googleModel", "");
+                      }
+                      return;
+                    }
+                    update("googleModel", e.target.value);
+                  }}
+                >
+                  <option value="">Select a model...</option>
+                  {visibleGoogleOptions.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {formatModelOptionLabel(option)}
+                    </option>
+                  ))}
+                  <option value="__custom__">
+                    {getCustomModelOptionLabel(config.googleModel, visibleGoogleOptions)}
+                  </option>
+                </select>
+              )}
+              <div className="hint" style={{ marginBottom: "0.5rem" }}>
+                Showing curated Gemini models.
+              </div>
+              <input
+                type="text"
+                placeholder="e.g., gemini-3.1-pro-preview"
+                value={config.googleModel}
+                onChange={(e) => update("googleModel", e.target.value)}
+              />
+              <div className="hint">
+                Use the dropdown or enter a custom Gemini model ID. The primary model is used as <code>google/&lt;model&gt;</code>.
+              </div>
+            </div>
+            <div className="form-group">
+              <label>Additional Models</label>
+              {additionalGoogleOptions.length > 0 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", marginBottom: "0.5rem", maxHeight: "150px", overflowY: "auto", border: "1px solid var(--border)", borderRadius: "6px", padding: "0.5rem" }}>
+                  {additionalGoogleOptions.map((option) => (
+                    <label key={option.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.85rem", cursor: "pointer" }}>
+                      <input
+                        type="checkbox"
+                        checked={config.googleModels.includes(option.id)}
+                        onChange={() => {
+                          setConfig((prev) => ({
+                            ...prev,
+                            googleModels: prev.googleModels.includes(option.id)
+                              ? prev.googleModels.filter((model) => model !== option.id)
+                              : [...prev.googleModels, option.id],
+                          }));
+                        }}
+                        style={{ width: "auto" }}
+                      />
+                      <code>{option.id}</code>
+                      {option.name !== option.id && <span style={{ color: "var(--text-secondary)" }}>({option.name})</span>}
+                    </label>
+                  ))}
+                </div>
+              )}
+              {config.googleModels.map((modelId, index) => (
+                <div key={index} style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginBottom: "0.25rem" }}>
+                  <input
+                    type="text"
+                    placeholder="e.g., gemini-2.5-flash"
+                    value={modelId}
+                    onChange={(e) => {
+                      setConfig((prev) => ({
+                        ...prev,
+                        googleModels: prev.googleModels.map((m, i) => i === index ? e.target.value : m),
+                      }));
+                    }}
+                    style={{ flex: 1 }}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    style={{ padding: "0.25rem 0.5rem" }}
+                    onClick={() => {
+                      setConfig((prev) => ({
+                        ...prev,
+                        googleModels: prev.googleModels.filter((_, i) => i !== index),
+                      }));
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                className="btn btn-ghost"
+                style={{ fontSize: "0.85rem", padding: "0.25rem 0.5rem", marginTop: "0.25rem" }}
+                disabled={!config.googleModel.trim()}
+                onClick={() => {
+                  setConfig((prev) => ({
+                    ...prev,
+                    googleModels: [...prev.googleModels, ""],
+                  }));
+                }}
+              >
+                + Add Model
+              </button>
+              <div className="hint">
+                Additional models appear in the OpenClaw model picker as <code>google/&lt;model&gt;</code>.
+              </div>
+            </div>
+          </>
+        );
+      }
 
       case "openrouter":
         return (
@@ -607,6 +863,7 @@ export function ProviderSection({
               const addPlaceholder = isVertexAnthropic ? "e.g., claude-opus-4-6" : "e.g., gemini-2.5-flash";
               const loading = isVertexAnthropic ? loadingVertexAnthropicModels : loadingVertexGoogleModels;
               const options = isVertexAnthropic ? vertexAnthropicModelOptions : vertexGoogleModelOptions;
+              const additionalOptions = options.filter((option) => option.id !== modelValue);
               const error = isVertexAnthropic ? vertexAnthropicModelsError : vertexGoogleModelsError;
               const warning = isVertexAnthropic ? vertexAnthropicModelsWarning : vertexGoogleModelsWarning;
               return (
@@ -623,39 +880,28 @@ export function ProviderSection({
                       <div className="hint">{warning}</div>
                     )}
                     {options.length > 0 && (
-                      <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", marginBottom: "0.5rem", maxHeight: "150px", overflowY: "auto", border: "1px solid var(--border)", borderRadius: "6px", padding: "0.5rem" }}>
-                        {options.map((option) => {
-                          const isSelected = modelValue === option.id || modelsValue.includes(option.id);
-                          return (
-                            <label key={option.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.85rem", cursor: "pointer" }}>
-                              <input
-                                type="checkbox"
-                                checked={isSelected}
-                                onChange={() => {
-                                  setConfig((prev) => {
-                                    const prevModel = prev[modelField] as string;
-                                    const prevModels = prev[modelsField] as string[];
-                                    if (isSelected) {
-                                      if (prevModel === option.id) {
-                                        return { ...prev, [modelField]: "" };
-                                      }
-                                      return { ...prev, [modelsField]: prevModels.filter((m) => m !== option.id) };
-                                    }
-                                    if (!prevModel.trim()) {
-                                      return { ...prev, [modelField]: option.id };
-                                    }
-                                    return { ...prev, [modelsField]: [...prevModels, option.id] };
-                                  });
-                                }}
-                                style={{ width: "auto" }}
-                              />
-                              <code>{option.id}</code>
-                              {option.name !== option.id && <span style={{ color: "var(--text-secondary)" }}>({option.name})</span>}
-                              {modelValue === option.id && <span style={{ color: "var(--text-secondary)", fontStyle: "italic" }}>(primary)</span>}
-                            </label>
-                          );
-                        })}
-                      </div>
+                      <select
+                        value={getModelSelectValue(modelValue, options)}
+                        onChange={(e) => {
+                          if (e.target.value === "__custom__") {
+                            if (options.some((option) => option.id === modelValue)) {
+                              update(modelField, "");
+                            }
+                            return;
+                          }
+                          update(modelField, e.target.value);
+                        }}
+                      >
+                        <option value="">Select a model...</option>
+                        {options.map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {formatModelOptionLabel(option)}
+                          </option>
+                        ))}
+                        <option value="__custom__">
+                          {getCustomModelOptionLabel(modelValue, options)}
+                        </option>
+                      </select>
                     )}
                     <input
                       type="text"
@@ -664,11 +910,37 @@ export function ProviderSection({
                       onChange={(e) => update(modelField, e.target.value)}
                     />
                     <div className="hint">
-                      Primary model used as the default in the OpenClaw model picker.
+                      Use the dropdown or enter a custom model ID. The primary model is used as the default in the OpenClaw model picker.
                     </div>
                   </div>
                   <div className="form-group">
                     <label>Additional Models</label>
+                    {additionalOptions.length > 0 && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", marginBottom: "0.5rem", maxHeight: "150px", overflowY: "auto", border: "1px solid var(--border)", borderRadius: "6px", padding: "0.5rem" }}>
+                        {additionalOptions.map((option) => (
+                          <label key={option.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.85rem", cursor: "pointer" }}>
+                            <input
+                              type="checkbox"
+                              checked={modelsValue.includes(option.id)}
+                              onChange={() => {
+                                setConfig((prev) => {
+                                  const prevModels = prev[modelsField] as string[];
+                                  return {
+                                    ...prev,
+                                    [modelsField]: prevModels.includes(option.id)
+                                      ? prevModels.filter((model) => model !== option.id)
+                                      : [...prevModels, option.id],
+                                  };
+                                });
+                              }}
+                              style={{ width: "auto" }}
+                            />
+                            <code>{option.id}</code>
+                            {option.name !== option.id && <span style={{ color: "var(--text-secondary)" }}>({option.name})</span>}
+                          </label>
+                        ))}
+                      </div>
+                    )}
                     {modelsValue.map((modelId, index) => (
                       <div key={index} style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginBottom: "0.25rem" }}>
                         <input
@@ -870,8 +1142,9 @@ export function ProviderSection({
           <select
             value={inferenceProvider}
             onChange={(e) => {
-              setInferenceProvider(e.target.value as InferenceProvider);
-              update("agentModel", "");
+              const nextProvider = e.target.value as InferenceProvider;
+              setInferenceProvider(nextProvider);
+              setConfig((prev) => ({ ...prev, agentModel: "" }));
             }}
           >
             {PROVIDER_OPTIONS.filter(

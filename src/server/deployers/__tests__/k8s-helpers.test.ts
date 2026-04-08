@@ -86,6 +86,18 @@ describe("model config generation", () => {
     expect(deriveModel(config)).toBe("openrouter/google/gemma-4-26b-a4b-it");
   });
 
+  it("normalizes Google model ids whether or not they already include the provider prefix", () => {
+    const config = makeConfig({
+      inferenceProvider: "google",
+      googleApiKey: "google-key",
+      googleModel: "gemini-3.1-pro-preview",
+    });
+
+    expect(normalizeModelRef(config, "gemini-3.1-pro-preview")).toBe("google/gemini-3.1-pro-preview");
+    expect(normalizeModelRef(config, "google/gemini-3.1-pro-preview")).toBe("google/gemini-3.1-pro-preview");
+    expect(deriveModel(config)).toBe("google/gemini-3.1-pro-preview");
+  });
+
   it("publishes only the configured default model in the agent catalog", () => {
     const config = makeConfig({
       anthropicApiKey: "test-key",
@@ -387,7 +399,7 @@ describe("model config generation", () => {
     expect(rendered.secrets?.providers?.vault?.noOutputTimeoutMs).toBe(15000);
   });
 
-  it("builds SecretRef-backed auth profiles for managed Anthropic and OpenAI credentials", () => {
+  it("builds SecretRef-backed auth profiles for managed Anthropic, OpenAI, and Google credentials", () => {
     const config = makeConfig({
       inferenceProvider: "anthropic",
       anthropicApiKeyRef: {
@@ -396,6 +408,7 @@ describe("model config generation", () => {
         id: "providers/anthropic/apiKey",
       },
       openaiApiKey: "sk-openai-runtime",
+      googleApiKey: "google-runtime-key",
     });
 
     expect(buildManagedAgentAuthProfiles(config)).toEqual({
@@ -417,6 +430,15 @@ describe("model config generation", () => {
             source: "env",
             provider: "default",
             id: "OPENAI_API_KEY",
+          },
+        },
+        "google:default": {
+          type: "api_key",
+          provider: "google",
+          keyRef: {
+            source: "env",
+            provider: "default",
+            id: "GEMINI_API_KEY",
           },
         },
       },
@@ -531,6 +553,42 @@ describe("model config generation", () => {
     expect(rendered.models?.providers?.openrouter?.models).toEqual([
       { id: "auto", name: "auto" },
       { id: "anthropic/claude-sonnet-4-6", name: "anthropic/claude-sonnet-4-6" },
+    ]);
+    expect(rendered.secrets?.providers).toMatchObject({
+      default: { source: "env" },
+    });
+  });
+
+  it("configures Google provider auth and published models", () => {
+    const config = makeConfig({
+      inferenceProvider: "google",
+      googleApiKey: "google-key",
+      googleModel: "gemini-3.1-pro-preview",
+      googleModels: ["gemini-2.5-flash"],
+    });
+
+    const rendered = buildOpenClawConfig(config, "gateway-token") as {
+      models?: {
+        providers?: Record<string, {
+          baseUrl?: string;
+          api?: string;
+          apiKey?: unknown;
+          models?: Array<{ id?: string; name?: string }>;
+        }>;
+      };
+      secrets?: { providers?: Record<string, unknown> };
+    };
+
+    expect(rendered.models?.providers?.google?.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
+    expect(rendered.models?.providers?.google?.api).toBe("google-generative-ai");
+    expect(rendered.models?.providers?.google?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "GEMINI_API_KEY",
+    });
+    expect(rendered.models?.providers?.google?.models).toEqual([
+      { id: "gemini-3.1-pro-preview", name: "gemini-3.1-pro-preview" },
+      { id: "gemini-2.5-flash", name: "gemini-2.5-flash" },
     ]);
     expect(rendered.secrets?.providers).toMatchObject({
       default: { source: "env" },
@@ -793,6 +851,11 @@ describe("detectUnavailableProvider", () => {
   it("detects missing OpenAI provider", () => {
     const config = makeConfig({ inferenceProvider: "anthropic", anthropicApiKey: "sk-ant" });
     expect(detectUnavailableProvider("openai/gpt-5.4", config)).toBe(true);
+  });
+
+  it("detects missing Google provider", () => {
+    const config = makeConfig({ inferenceProvider: "anthropic", anthropicApiKey: "sk-ant" });
+    expect(detectUnavailableProvider("google/gemini-3.1-pro-preview", config)).toBe(true);
   });
 
   it("detects missing Anthropic provider", () => {

@@ -86,6 +86,13 @@ export function applyServerEnvFallbacks(config: DeployConfig, env: NodeJS.Proces
     config.openaiApiKey = env.OPENAI_API_KEY;
   }
   if (
+    !config.googleApiKey
+    && !config.googleApiKeyRef
+    && (env.GEMINI_API_KEY || env.GOOGLE_API_KEY)
+  ) {
+    config.googleApiKey = env.GEMINI_API_KEY || env.GOOGLE_API_KEY;
+  }
+  if (
     !config.openrouterApiKey
     && !config.openrouterApiKeyRef
     && env.OPENROUTER_API_KEY
@@ -135,10 +142,13 @@ router.post("/", async (req, res) => {
   config.telegramAllowFrom = trimOptional(config.telegramAllowFrom);
   config.anthropicModel = trimOptional(config.anthropicModel);
   config.openaiModel = trimOptional(config.openaiModel);
+  config.googleApiKey = trimOptional(config.googleApiKey);
+  config.googleModel = trimOptional(config.googleModel);
   config.openrouterApiKey = trimOptional(config.openrouterApiKey);
   config.openrouterModel = trimOptional(config.openrouterModel);
   config.anthropicModels = normalizeStringArray(config.anthropicModels);
   config.openaiModels = normalizeStringArray(config.openaiModels);
+  config.googleModels = normalizeStringArray(config.googleModels);
   config.openrouterModels = normalizeStringArray(config.openrouterModels);
   config.namespace = trimOptional(config.namespace);
   config.a2aRealm = trimOptional(config.a2aRealm);
@@ -165,6 +175,7 @@ router.post("/", async (req, res) => {
   try {
     config.anthropicApiKeyRef = normalizeSecretRef(config.anthropicApiKeyRef);
     config.openaiApiKeyRef = normalizeSecretRef(config.openaiApiKeyRef);
+    config.googleApiKeyRef = normalizeSecretRef(config.googleApiKeyRef);
     config.openrouterApiKeyRef = normalizeSecretRef(config.openrouterApiKeyRef);
     config.modelEndpointApiKeyRef = normalizeSecretRef(config.modelEndpointApiKeyRef);
     config.telegramBotTokenRef = normalizeSecretRef(config.telegramBotTokenRef);
@@ -239,6 +250,8 @@ router.post("/", async (req, res) => {
       config.inferenceProvider = "anthropic";
     } else if (config.openaiApiKey) {
       config.inferenceProvider = "openai";
+    } else if (config.googleApiKey || config.googleApiKeyRef) {
+      config.inferenceProvider = "google";
     }
   }
 

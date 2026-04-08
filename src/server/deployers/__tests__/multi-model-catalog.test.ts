@@ -75,4 +75,16 @@ describe("buildConfiguredAgentModelCatalog with multi-model arrays", () => {
     const catalog = buildConfiguredAgentModelCatalog(config, "anthropic/claude-sonnet-4-6");
     expect(catalog["anthropic/claude-sonnet-4-6"]).toBeDefined();
   });
+
+  it("adds the default Anthropic model when local Podman secret mappings provide the provider auth", () => {
+    const config = minimalConfig({
+      inferenceProvider: "openrouter",
+      openrouterApiKey: "sk-or-test",
+      podmanSecretMappings: [
+        { secretName: "anthropic_api_key", targetEnv: "ANTHROPIC_API_KEY" },
+      ],
+    });
+    const catalog = buildConfiguredAgentModelCatalog(config, "openrouter/auto");
+    expect(catalog["anthropic/claude-sonnet-4-6"]).toEqual({ alias: "claude-sonnet-4-6" });
+  });
 });

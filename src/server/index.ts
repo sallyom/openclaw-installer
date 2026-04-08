@@ -92,6 +92,7 @@ app.get("/api/health", async (_req, res) => {
     defaults: {
       hasAnthropicKey: !!process.env.ANTHROPIC_API_KEY,
       hasOpenaiKey: !!process.env.OPENAI_API_KEY,
+      hasGoogleKey: !!process.env.GEMINI_API_KEY || !!process.env.GOOGLE_API_KEY,
       hasOpenrouterKey: !!process.env.OPENROUTER_API_KEY,
       hasTelegramToken: !!process.env.TELEGRAM_BOT_TOKEN,
       telegramAllowFrom: process.env.TELEGRAM_ALLOW_FROM || "",

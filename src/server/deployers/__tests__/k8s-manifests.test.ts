@@ -222,6 +222,23 @@ describe("gateway env vars in proxy mode", () => {
     expect(secret.stringData?.TELEGRAM_BOT_TOKEN).toBe("123:abc");
   });
 
+  it("materializes Google credentials into the backing Secret data", () => {
+    const config = makeConfig({
+      inferenceProvider: "google",
+      googleApiKey: "google-key",
+      googleApiKeyRef: {
+        source: "env",
+        provider: "default",
+        id: "GOOGLE_API_KEY",
+      },
+    });
+
+    const secret = secretManifest("ns", config, "gateway-token");
+
+    expect(secret.stringData?.GOOGLE_API_KEY).toBe("google-key");
+    expect(secret.stringData?.GEMINI_API_KEY).toBeUndefined();
+  });
+
   it("materializes custom env/default SecretRef ids into the backing Secret data", () => {
     const config = makeConfig({
       inferenceProvider: "openai",

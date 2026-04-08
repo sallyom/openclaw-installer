@@ -17,6 +17,7 @@ function healthJson(deployers: DeployerStub[], overrides: Record<string, unknown
     defaults: {
       hasAnthropicKey: true,
       hasOpenaiKey: false,
+      hasGoogleKey: false,
       hasOpenrouterKey: false,
       hasTelegramToken: false,
       telegramAllowFrom: "",
@@ -214,6 +215,7 @@ describe("DeployForm agent name validation (issue #7)", () => {
 
     expect(await screen.findByText("Anthropic SecretRef Source")).toBeTruthy();
     expect(screen.getByText("OpenAI SecretRef Source")).toBeTruthy();
+    expect(screen.getByText("Google SecretRef Source")).toBeTruthy();
     expect(screen.getByText("OpenRouter SecretRef Source")).toBeTruthy();
     expect(screen.getByText("OpenAI-Compatible Endpoint SecretRef Source")).toBeTruthy();
   });
@@ -235,6 +237,90 @@ describe("DeployForm agent name validation (issue #7)", () => {
 
     expect(await screen.findByText("OpenRouter API Key")).toBeTruthy();
     expect(screen.getByText("OpenRouter Model")).toBeTruthy();
+  });
+
+  it("shows Google as an available inference provider", async () => {
+    global.fetch = mockHealthResponse([
+      { mode: "local", title: "This Machine", description: "Run locally", available: true, priority: 0, builtIn: true },
+    ]);
+
+    render(<DeployForm onDeployStarted={() => {}} />);
+
+    await screen.findAllByRole("button", { name: /deploy openclaw/i });
+
+    const providerSelect = screen.getAllByRole("combobox").find((element) =>
+      Array.from((element as HTMLSelectElement).options).some((option) => option.value === "google"),
+    ) as HTMLSelectElement | undefined;
+    expect(providerSelect).toBeTruthy();
+    fireEvent.change(providerSelect!, { target: { value: "google" } });
+
+    expect(await screen.findByText("Google API Key")).toBeTruthy();
+    expect(screen.getByText("Google Model")).toBeTruthy();
+  });
+
+  it("shows primary model dropdown options for Anthropic and OpenAI", async () => {
+    global.fetch = mockHealthResponse([
+      { mode: "local", title: "This Machine", description: "Run locally", available: true, priority: 0, builtIn: true },
+    ]);
+
+    render(<DeployForm onDeployStarted={() => {}} />);
+
+    await screen.findAllByRole("button", { name: /deploy openclaw/i });
+
+    const anthropicModelSelect = screen.getAllByRole("combobox").find((element) =>
+      Array.from((element as HTMLSelectElement).options).some((option) => option.value === "claude-sonnet-4-6"),
+    ) as HTMLSelectElement | undefined;
+    expect(anthropicModelSelect).toBeTruthy();
+    expect(
+      Array.from(anthropicModelSelect!.options).some((option) => option.value === "claude-sonnet-4-6"),
+    ).toBe(true);
+
+    const primaryProviderSelect = screen.getAllByRole("combobox").find((element) =>
+      Array.from((element as HTMLSelectElement).options).some((option) => option.value === "openai"),
+    ) as HTMLSelectElement | undefined;
+    expect(primaryProviderSelect).toBeTruthy();
+    fireEvent.change(primaryProviderSelect!, { target: { value: "openai" } });
+
+    const openaiModelSelect = await screen.findAllByRole("combobox").then((elements) =>
+      elements.find((element) =>
+        Array.from((element as HTMLSelectElement).options).some((option) => option.value === "gpt-5"),
+      ) as HTMLSelectElement | undefined,
+    );
+    expect(openaiModelSelect).toBeTruthy();
+    expect(
+      Array.from(openaiModelSelect!.options).some((option) => option.value === "gpt-5"),
+    ).toBe(true);
+  });
+
+  it("prefills the default Anthropic model when Anthropic is added as an additional provider", async () => {
+    global.fetch = mockHealthResponse([
+      { mode: "local", title: "This Machine", description: "Run locally", available: true, priority: 0, builtIn: true },
+    ]);
+
+    render(<DeployForm onDeployStarted={() => {}} />);
+
+    await screen.findAllByRole("button", { name: /deploy openclaw/i });
+
+    const primaryProviderSelect = screen.getAllByRole("combobox").find((element) =>
+      Array.from((element as HTMLSelectElement).options).some((option) => option.value === "openrouter"),
+    ) as HTMLSelectElement | undefined;
+    expect(primaryProviderSelect).toBeTruthy();
+    fireEvent.change(primaryProviderSelect!, { target: { value: "openrouter" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /\+ add provider/i }));
+
+    const providerSelects = screen.getAllByRole("combobox");
+    const additionalProviderSelect = providerSelects.find((element) =>
+      Array.from((element as HTMLSelectElement).options).some((option) => option.text === "Select a provider..."),
+    ) as HTMLSelectElement | undefined;
+    expect(additionalProviderSelect).toBeTruthy();
+
+    fireEvent.change(additionalProviderSelect!, { target: { value: "anthropic" } });
+
+    const anthropicModelInput = await screen.findByPlaceholderText("e.g., claude-sonnet-4-6") as HTMLInputElement;
+    await waitFor(() => {
+      expect(anthropicModelInput.value).toBe("claude-sonnet-4-6");
+    });
   });
 
   it("validates Podman secret mapping syntax", async () => {

@@ -12,11 +12,13 @@ describe("Multi-model per provider", () => {
       const config = createInitialDeployFormConfig();
       expect(config.anthropicModels).toEqual([]);
       expect(config.openaiModels).toEqual([]);
+      expect(config.googleModels).toEqual([]);
       expect(config.openrouterModels).toEqual([]);
       expect(config.podmanSecretMappingsText).toBe(
         [
           "anthropic_api_key=ANTHROPIC_API_KEY",
           "openai_api_key=OPENAI_API_KEY",
+          "gemini_api_key=GEMINI_API_KEY",
           "openrouter_api_key=OPENROUTER_API_KEY",
           "model_endpoint_api_key=MODEL_ENDPOINT_API_KEY",
         ].join("\n"),
@@ -78,6 +80,20 @@ describe("Multi-model per provider", () => {
         suggestedNamespace: "test-ns",
       });
       expect(body.openrouterModels).toEqual(["openrouter/auto", "openrouter/anthropic/claude-sonnet-4-6"]);
+    });
+
+    it("includes googleModels when non-empty", () => {
+      const config = createInitialDeployFormConfig();
+      config.agentName = "test";
+      config.googleModels = ["gemini-2.5-flash", "google/gemini-3.1-pro-preview"];
+      const body = buildDeployRequestBody({
+        mode: "local",
+        inferenceProvider: "google",
+        config,
+        isVertex: false,
+        suggestedNamespace: "test-ns",
+      });
+      expect(body.googleModels).toEqual(["gemini-2.5-flash", "google/gemini-3.1-pro-preview"]);
     });
 
     it("excludes openaiModels when empty", () => {
@@ -147,6 +163,23 @@ describe("Multi-model per provider", () => {
       expect(env).toContain("OPENROUTER_API_KEY=sk-or-test");
       expect(env).toContain("OPENROUTER_MODEL=openrouter/auto");
       expect(env).toContain("OPENROUTER_MODELS_B64=");
+    });
+
+    it("encodes Google settings into the exported env file", () => {
+      const config = createInitialDeployFormConfig();
+      config.agentName = "test";
+      config.googleApiKey = "google-key";
+      config.googleModel = "gemini-3.1-pro-preview";
+      config.googleModels = ["gemini-2.5-flash"];
+      const env = buildEnvFileContent({
+        config,
+        inferenceProvider: "google",
+        isVertex: false,
+        suggestedNamespace: "test-ns",
+      });
+      expect(env).toContain("GEMINI_API_KEY=google-key");
+      expect(env).toContain("GOOGLE_MODEL=gemini-3.1-pro-preview");
+      expect(env).toContain("GOOGLE_MODELS_B64=");
     });
 
     it("encodes Podman secret mappings as base64", () => {
@@ -240,6 +273,20 @@ describe("Multi-model per provider", () => {
       expect(config.openrouterApiKeyRefSource).toBe("env");
       expect(config.openrouterApiKeyRefProvider).toBe("default");
       expect(config.openrouterApiKeyRefId).toBe("OPENROUTER_API_KEY");
+    });
+
+    it("infers env/default Google SecretRefs from Podman secret mappings", () => {
+      const prev = createInitialDeployFormConfig();
+      const mappings = [
+        { secretName: "gemini_api_key", targetEnv: "GOOGLE_API_KEY" },
+      ];
+      const vars: Record<string, unknown> = {
+        PODMAN_SECRET_MAPPINGS_B64: window.btoa(JSON.stringify(mappings)),
+      };
+      const { config } = applySavedVarsToConfig(vars, prev);
+      expect(config.googleApiKeyRefSource).toBe("env");
+      expect(config.googleApiKeyRefProvider).toBe("default");
+      expect(config.googleApiKeyRefId).toBe("GOOGLE_API_KEY");
     });
   });
 });

@@ -32,6 +32,9 @@ export function createInitialDeployFormConfig(): DeployFormConfig {
     openaiApiKeyRefSource: "env",
     openaiApiKeyRefProvider: "default",
     openaiApiKeyRefId: "",
+    googleApiKeyRefSource: "env",
+    googleApiKeyRefProvider: "default",
+    googleApiKeyRefId: "",
     openrouterApiKeyRefSource: "env",
     openrouterApiKeyRefProvider: "default",
     openrouterApiKeyRefId: "",
@@ -64,12 +67,15 @@ export function createInitialDeployFormConfig(): DeployFormConfig {
     sandboxSshKnownHostsPath: "",
     anthropicApiKey: "",
     openaiApiKey: "",
+    googleApiKey: "",
     openrouterApiKey: "",
     anthropicModel: "",
     openaiModel: "",
+    googleModel: "",
     openrouterModel: "",
     anthropicModels: [],
     openaiModels: [],
+    googleModels: [],
     openrouterModels: [],
     agentModel: "",
     vertexAnthropicModel: "",
@@ -115,7 +121,7 @@ function getStringVar(vars: Record<string, unknown>, envKey: string, jsonKey: st
 function decodeSecretRefVar(
   vars: Record<string, unknown>,
   b64Key: string,
-  jsonKey: "anthropicApiKeyRef" | "openaiApiKeyRef" | "openrouterApiKeyRef" | "modelEndpointApiKeyRef" | "telegramBotTokenRef",
+  jsonKey: "anthropicApiKeyRef" | "openaiApiKeyRef" | "googleApiKeyRef" | "openrouterApiKeyRef" | "modelEndpointApiKeyRef" | "telegramBotTokenRef",
 ): SecretRefValue | undefined {
   const decoded = decodeJsonBase64<SecretRefValue>(vars[b64Key] as string | undefined);
   if (decoded) return decoded;
@@ -155,14 +161,16 @@ function decodePodmanSecretMappingsText(vars: Record<string, unknown>): string {
 
 function inferredEnvSecretRefFromPodmanMappings(
   mappingsText: string,
-  targetEnv: string,
+  targetEnv: string | string[],
 ): SecretRefValue | undefined {
   const parsed = parsePodmanSecretMappingsText(mappingsText);
-  if (parsed.mappings.some((mapping) => mapping.targetEnv === targetEnv)) {
+  const targetEnvs = Array.isArray(targetEnv) ? targetEnv : [targetEnv];
+  const matched = parsed.mappings.find((mapping) => targetEnvs.includes(mapping.targetEnv));
+  if (matched) {
     return {
       source: "env",
       provider: "default",
-      id: targetEnv,
+      id: matched.targetEnv,
     };
   }
   return undefined;
@@ -173,6 +181,7 @@ export function inferSavedInferenceProvider(vars: Record<string, unknown>): Infe
   if (
     savedInferenceProvider === "anthropic"
     || savedInferenceProvider === "openai"
+    || savedInferenceProvider === "google"
     || savedInferenceProvider === "openrouter"
     || savedInferenceProvider === "vertex-anthropic"
     || savedInferenceProvider === "vertex-google"
@@ -183,6 +192,7 @@ export function inferSavedInferenceProvider(vars: Record<string, unknown>): Infe
 
   const anthropicApiKeyRef = decodeSecretRefVar(vars, "ANTHROPIC_API_KEY_REF_B64", "anthropicApiKeyRef");
   const openaiApiKeyRef = decodeSecretRefVar(vars, "OPENAI_API_KEY_REF_B64", "openaiApiKeyRef");
+  const googleApiKeyRef = decodeSecretRefVar(vars, "GOOGLE_API_KEY_REF_B64", "googleApiKeyRef");
   const openrouterApiKeyRef = decodeSecretRefVar(vars, "OPENROUTER_API_KEY_REF_B64", "openrouterApiKeyRef");
   const modelEndpointApiKeyRef = decodeSecretRefVar(vars, "MODEL_ENDPOINT_API_KEY_REF_B64", "modelEndpointApiKeyRef");
   const vertexEnabled = vars.VERTEX_ENABLED === "true" || vars.vertexEnabled === "true";
@@ -202,6 +212,13 @@ export function inferSavedInferenceProvider(vars: Record<string, unknown>): Infe
   if (getStringVar(vars, "OPENAI_API_KEY", "openaiApiKey") || openaiApiKeyRef) {
     return "openai";
   }
+  if (
+    getStringVar(vars, "GEMINI_API_KEY", "googleApiKey")
+    || getStringVar(vars, "GOOGLE_API_KEY", "googleApiKey")
+    || googleApiKeyRef
+  ) {
+    return "google";
+  }
   return undefined;
 }
 
@@ -211,6 +228,7 @@ export function applySavedVarsToConfig(
 ): { config: DeployFormConfig; namespaceManuallyEdited: boolean } {
   const anthropicApiKeyRef = decodeSecretRefVar(vars, "ANTHROPIC_API_KEY_REF_B64", "anthropicApiKeyRef");
   const openaiApiKeyRef = decodeSecretRefVar(vars, "OPENAI_API_KEY_REF_B64", "openaiApiKeyRef");
+  const googleApiKeyRef = decodeSecretRefVar(vars, "GOOGLE_API_KEY_REF_B64", "googleApiKeyRef");
   const openrouterApiKeyRef = decodeSecretRefVar(vars, "OPENROUTER_API_KEY_REF_B64", "openrouterApiKeyRef");
   const modelEndpointApiKeyRef = decodeSecretRefVar(vars, "MODEL_ENDPOINT_API_KEY_REF_B64", "modelEndpointApiKeyRef");
   const telegramBotTokenRef = decodeSecretRefVar(vars, "TELEGRAM_BOT_TOKEN_REF_B64", "telegramBotTokenRef");
@@ -218,6 +236,8 @@ export function applySavedVarsToConfig(
   const savedPodmanSecretMappingsText = decodePodmanSecretMappingsText(vars);
   const inferredAnthropicRef = anthropicApiKeyRef || inferredEnvSecretRefFromPodmanMappings(savedPodmanSecretMappingsText, "ANTHROPIC_API_KEY");
   const inferredOpenaiRef = openaiApiKeyRef || inferredEnvSecretRefFromPodmanMappings(savedPodmanSecretMappingsText, "OPENAI_API_KEY");
+  const inferredGoogleRef = googleApiKeyRef
+    || inferredEnvSecretRefFromPodmanMappings(savedPodmanSecretMappingsText, ["GEMINI_API_KEY", "GOOGLE_API_KEY"]);
   const inferredOpenrouterRef = openrouterApiKeyRef || inferredEnvSecretRefFromPodmanMappings(savedPodmanSecretMappingsText, "OPENROUTER_API_KEY");
   const inferredModelEndpointRef = modelEndpointApiKeyRef
     || inferredEnvSecretRefFromPodmanMappings(savedPodmanSecretMappingsText, "MODEL_ENDPOINT_API_KEY");
@@ -241,6 +261,9 @@ export function applySavedVarsToConfig(
       openaiApiKeyRefSource: inferredOpenaiRef?.source || prev.openaiApiKeyRefSource,
       openaiApiKeyRefProvider: inferredOpenaiRef?.provider || prev.openaiApiKeyRefProvider,
       openaiApiKeyRefId: inferredOpenaiRef?.id || prev.openaiApiKeyRefId,
+      googleApiKeyRefSource: inferredGoogleRef?.source || prev.googleApiKeyRefSource,
+      googleApiKeyRefProvider: inferredGoogleRef?.provider || prev.googleApiKeyRefProvider,
+      googleApiKeyRefId: inferredGoogleRef?.id || prev.googleApiKeyRefId,
       openrouterApiKeyRefSource: inferredOpenrouterRef?.source || prev.openrouterApiKeyRefSource,
       openrouterApiKeyRefProvider: inferredOpenrouterRef?.provider || prev.openrouterApiKeyRefProvider,
       openrouterApiKeyRefId: inferredOpenrouterRef?.id || prev.openrouterApiKeyRefId,
@@ -327,6 +350,11 @@ export function applySavedVarsToConfig(
       port: getStringVar(vars, "OPENCLAW_PORT", "port") || prev.port,
       anthropicModel: getStringVar(vars, "ANTHROPIC_MODEL", "anthropicModel") || prev.anthropicModel,
       openaiModel: getStringVar(vars, "OPENAI_MODEL", "openaiModel") || prev.openaiModel,
+      googleApiKey:
+        getStringVar(vars, "GEMINI_API_KEY", "googleApiKey")
+          || getStringVar(vars, "GOOGLE_API_KEY", "googleApiKey")
+          || prev.googleApiKey,
+      googleModel: getStringVar(vars, "GOOGLE_MODEL", "googleModel") || prev.googleModel,
       openrouterApiKey:
         getStringVar(vars, "OPENROUTER_API_KEY", "openrouterApiKey") || prev.openrouterApiKey,
       openrouterModel: getStringVar(vars, "OPENROUTER_MODEL", "openrouterModel") || prev.openrouterModel,
@@ -334,6 +362,8 @@ export function applySavedVarsToConfig(
         decodeStringArrayVar(vars, "ANTHROPIC_MODELS_B64", "anthropicModels") || prev.anthropicModels,
       openaiModels:
         decodeStringArrayVar(vars, "OPENAI_MODELS_B64", "openaiModels") || prev.openaiModels,
+      googleModels:
+        decodeStringArrayVar(vars, "GOOGLE_MODELS_B64", "googleModels") || prev.googleModels,
       openrouterModels:
         decodeStringArrayVar(vars, "OPENROUTER_MODELS_B64", "openrouterModels") || prev.openrouterModels,
       agentModel: getStringVar(vars, "AGENT_MODEL", "agentModel") || prev.agentModel,
@@ -393,6 +423,7 @@ export function buildDeployRequestBody(params: {
   suggestedNamespace: string;
   anthropicApiKeyRef?: SecretRefValue;
   openaiApiKeyRef?: SecretRefValue;
+  googleApiKeyRef?: SecretRefValue;
   openrouterApiKeyRef?: SecretRefValue;
   modelEndpointApiKeyRef?: SecretRefValue;
   telegramBotTokenRef?: SecretRefValue;
@@ -405,6 +436,7 @@ export function buildDeployRequestBody(params: {
     suggestedNamespace,
     anthropicApiKeyRef,
     openaiApiKeyRef,
+    googleApiKeyRef,
     openrouterApiKeyRef,
     modelEndpointApiKeyRef,
     telegramBotTokenRef,
@@ -424,6 +456,7 @@ export function buildDeployRequestBody(params: {
     secretsProvidersJson: trimToUndefined(config.secretsProvidersJson),
     anthropicApiKeyRef,
     openaiApiKeyRef,
+    googleApiKeyRef,
     openrouterApiKeyRef,
     modelEndpointApiKeyRef,
     telegramBotTokenRef: config.telegramEnabled ? telegramBotTokenRef : undefined,
@@ -460,11 +493,14 @@ export function buildDeployRequestBody(params: {
       config.sandboxEnabled ? config.sandboxSshKnownHosts || undefined : undefined,
     anthropicApiKey: !anthropicApiKeyRef ? trimToUndefined(config.anthropicApiKey) : undefined,
     openaiApiKey: !openaiApiKeyRef ? trimToUndefined(config.openaiApiKey) : undefined,
+    googleApiKey: !googleApiKeyRef ? trimToUndefined(config.googleApiKey) : undefined,
     openrouterApiKey: !openrouterApiKeyRef ? trimToUndefined(config.openrouterApiKey) : undefined,
     anthropicModel: trimToUndefined(config.anthropicModel),
     anthropicModels: config.anthropicModels.length > 0 ? config.anthropicModels : undefined,
     openaiModel: trimToUndefined(config.openaiModel),
     openaiModels: config.openaiModels.length > 0 ? config.openaiModels : undefined,
+    googleModel: trimToUndefined(config.googleModel),
+    googleModels: config.googleModels.length > 0 ? config.googleModels : undefined,
     openrouterModel: trimToUndefined(config.openrouterModel),
     openrouterModels: config.openrouterModels.length > 0 ? config.openrouterModels : undefined,
     agentModel: config.agentModel || undefined,
@@ -513,6 +549,7 @@ export function buildEnvFileContent(params: {
   suggestedNamespace: string;
   anthropicApiKeyRef?: SecretRefValue;
   openaiApiKeyRef?: SecretRefValue;
+  googleApiKeyRef?: SecretRefValue;
   openrouterApiKeyRef?: SecretRefValue;
   modelEndpointApiKeyRef?: SecretRefValue;
   telegramBotTokenRef?: SecretRefValue;
@@ -524,6 +561,7 @@ export function buildEnvFileContent(params: {
     suggestedNamespace,
     anthropicApiKeyRef,
     openaiApiKeyRef,
+    googleApiKeyRef,
     openrouterApiKeyRef,
     modelEndpointApiKeyRef,
     telegramBotTokenRef,
@@ -543,11 +581,14 @@ export function buildEnvFileContent(params: {
     `INFERENCE_PROVIDER=${inferenceProvider}`,
     `ANTHROPIC_API_KEY=${anthropicApiKeyRef ? "" : config.anthropicApiKey}`,
     `OPENAI_API_KEY=${openaiApiKeyRef ? "" : config.openaiApiKey}`,
+    `GEMINI_API_KEY=${googleApiKeyRef ? "" : config.googleApiKey}`,
     `OPENROUTER_API_KEY=${openrouterApiKeyRef ? "" : config.openrouterApiKey}`,
     `ANTHROPIC_MODEL=${config.anthropicModel}`,
     `ANTHROPIC_MODELS_B64=${encodeBase64(JSON.stringify(config.anthropicModels))}`,
     `OPENAI_MODEL=${config.openaiModel}`,
     `OPENAI_MODELS_B64=${encodeBase64(JSON.stringify(config.openaiModels))}`,
+    `GOOGLE_MODEL=${config.googleModel}`,
+    `GOOGLE_MODELS_B64=${encodeBase64(JSON.stringify(config.googleModels))}`,
     `OPENROUTER_MODEL=${config.openrouterModel}`,
     `OPENROUTER_MODELS_B64=${encodeBase64(JSON.stringify(config.openrouterModels))}`,
     `OPENAI_COMPATIBLE_ENDPOINTS_ENABLED=${config.openaiCompatibleEndpointsEnabled}`,
@@ -618,6 +659,9 @@ export function buildEnvFileContent(params: {
   }
   if (openaiApiKeyRef) {
     lines.push(`OPENAI_API_KEY_REF_B64=${encodeBase64(JSON.stringify(openaiApiKeyRef))}`);
+  }
+  if (googleApiKeyRef) {
+    lines.push(`GOOGLE_API_KEY_REF_B64=${encodeBase64(JSON.stringify(googleApiKeyRef))}`);
   }
   if (openrouterApiKeyRef) {
     lines.push(`OPENROUTER_API_KEY_REF_B64=${encodeBase64(JSON.stringify(openrouterApiKeyRef))}`);

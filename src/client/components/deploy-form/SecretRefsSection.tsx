@@ -7,10 +7,12 @@ interface SecretRefsSectionProps {
   mode: string;
   effectiveAnthropicApiKeyRef?: SecretRefValue;
   effectiveOpenaiApiKeyRef?: SecretRefValue;
+  effectiveGoogleApiKeyRef?: SecretRefValue;
   effectiveOpenrouterApiKeyRef?: SecretRefValue;
   effectiveModelEndpointApiKeyRef?: SecretRefValue;
   anthropicApiKeyRefIsInferred?: boolean;
   openaiApiKeyRefIsInferred?: boolean;
+  googleApiKeyRefIsInferred?: boolean;
   openrouterApiKeyRefIsInferred?: boolean;
   modelEndpointApiKeyRefIsInferred?: boolean;
 }
@@ -25,10 +27,12 @@ export function SecretRefsSection({
   mode,
   effectiveAnthropicApiKeyRef,
   effectiveOpenaiApiKeyRef,
+  effectiveGoogleApiKeyRef,
   effectiveOpenrouterApiKeyRef,
   effectiveModelEndpointApiKeyRef,
   anthropicApiKeyRefIsInferred = false,
   openaiApiKeyRefIsInferred = false,
+  googleApiKeyRefIsInferred = false,
   openrouterApiKeyRefIsInferred = false,
   modelEndpointApiKeyRefIsInferred = false,
 }: SecretRefsSectionProps) {
@@ -44,6 +48,14 @@ export function SecretRefsSection({
     : "Optional override. Leave blank to use the installer-managed SecretRef automatically.";
 
   const openaiHint = openaiApiKeyRefIsInferred
+    ? isLocal
+      ? "Currently inferred from local Podman secret mappings or the local API key field."
+      : isCluster
+        ? "Currently inferred from the installer-managed openclaw-secrets Secret."
+        : "Currently inferred from the deploy form."
+    : "Optional override. Leave blank to use the installer-managed SecretRef automatically.";
+
+  const googleHint = googleApiKeyRefIsInferred
     ? isLocal
       ? "Currently inferred from local Podman secret mappings or the local API key field."
       : isCluster
@@ -73,7 +85,7 @@ export function SecretRefsSection({
       <div className="card" style={{ marginTop: "0.75rem" }}>
         <div className="hint" style={{ marginBottom: "0.75rem" }}>
           These control how generated OpenClaw config references provider credentials. The installer can infer the
-          built-in Anthropic, OpenAI, OpenRouter, and OpenAI-compatible endpoint SecretRefs automatically from your local Podman secret mappings or the managed
+          built-in Anthropic, OpenAI, Google, OpenRouter, and OpenAI-compatible endpoint SecretRefs automatically from your local Podman secret mappings or the managed
           Kubernetes <code>openclaw-secrets</code> Secret. Override them here only when you need a different source,
           provider, or id.
         </div>
@@ -153,6 +165,45 @@ export function SecretRefsSection({
               onChange={(e) => update("openaiApiKeyRefId", e.target.value)}
             />
             <div className="hint">{openaiHint}</div>
+          </div>
+        </div>
+
+        <div className="card" style={{ marginBottom: "1rem" }}>
+          <div className="hint" style={{ marginBottom: "0.75rem" }}>
+            Effective Google SecretRef: <code>{formatSecretRef(effectiveGoogleApiKeyRef)}</code>
+            {googleApiKeyRefIsInferred ? " (inferred)" : ""}
+          </div>
+          <div className="form-row">
+            <div className="form-group">
+              <label>Google SecretRef Source</label>
+              <select
+                value={config.googleApiKeyRefSource}
+                onChange={(e) => update("googleApiKeyRefSource", e.target.value)}
+              >
+                <option value="env">env</option>
+                <option value="file">file</option>
+                <option value="exec">exec</option>
+              </select>
+            </div>
+            <div className="form-group">
+              <label>Google SecretRef Provider</label>
+              <input
+                type="text"
+                placeholder="default"
+                value={config.googleApiKeyRefProvider}
+                onChange={(e) => update("googleApiKeyRefProvider", e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="form-group">
+            <label>Google SecretRef ID</label>
+            <input
+              type="text"
+              placeholder="GEMINI_API_KEY or GOOGLE_API_KEY or /providers/google/apiKey"
+              value={config.googleApiKeyRefId}
+              onChange={(e) => update("googleApiKeyRefId", e.target.value)}
+            />
+            <div className="hint">{googleHint}</div>
           </div>
         </div>
 

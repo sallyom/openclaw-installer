@@ -96,6 +96,7 @@ export function parseSavedLocalInstanceConfig(savedVars: Record<string, string>)
     inferenceProvider: savedVars.INFERENCE_PROVIDER as
       | "anthropic"
       | "openai"
+      | "google"
       | "openrouter"
       | "vertex-anthropic"
       | "vertex-google"
@@ -106,14 +107,17 @@ export function parseSavedLocalInstanceConfig(savedVars: Record<string, string>)
     secretsProvidersJson: decodeSavedBase64(savedVars.SECRETS_PROVIDERS_JSON_B64),
     anthropicApiKeyRef: decodeSavedJson<DeploySecretRef>(savedVars.ANTHROPIC_API_KEY_REF_B64),
     openaiApiKeyRef: decodeSavedJson<DeploySecretRef>(savedVars.OPENAI_API_KEY_REF_B64),
+    googleApiKeyRef: decodeSavedJson<DeploySecretRef>(savedVars.GOOGLE_API_KEY_REF_B64),
     openrouterApiKeyRef: decodeSavedJson<DeploySecretRef>(savedVars.OPENROUTER_API_KEY_REF_B64),
     modelEndpointApiKeyRef: decodeSavedJson<DeploySecretRef>(savedVars.MODEL_ENDPOINT_API_KEY_REF_B64),
     telegramBotTokenRef: decodeSavedJson<DeploySecretRef>(savedVars.TELEGRAM_BOT_TOKEN_REF_B64),
     anthropicApiKey: savedVars.ANTHROPIC_API_KEY || undefined,
     openaiApiKey: savedVars.OPENAI_API_KEY || undefined,
+    googleApiKey: savedVars.GEMINI_API_KEY || savedVars.GOOGLE_API_KEY || undefined,
     openrouterApiKey: savedVars.OPENROUTER_API_KEY || undefined,
     anthropicModel: savedVars.ANTHROPIC_MODEL || undefined,
     openaiModel: savedVars.OPENAI_MODEL || undefined,
+    googleModel: savedVars.GOOGLE_MODEL || undefined,
     openrouterModel: savedVars.OPENROUTER_MODEL || undefined,
     modelFallbacks: decodeSavedJson(savedVars.MODEL_FALLBACKS_B64),
     openaiCompatibleEndpointsEnabled:
@@ -123,6 +127,7 @@ export function parseSavedLocalInstanceConfig(savedVars: Record<string, string>)
     modelEndpointModel: savedVars.MODEL_ENDPOINT_MODEL || undefined,
     modelEndpointModelLabel: savedVars.MODEL_ENDPOINT_MODEL_LABEL || undefined,
     modelEndpointModels: decodeSavedJson(savedVars.MODEL_ENDPOINT_MODELS_B64),
+    googleModels: decodeSavedJson(savedVars.GOOGLE_MODELS_B64),
     openrouterModels: decodeSavedJson(savedVars.OPENROUTER_MODELS_B64),
     agentModel: savedVars.AGENT_MODEL || undefined,
     agentSourceDir: savedVars.AGENT_SOURCE_DIR || undefined,

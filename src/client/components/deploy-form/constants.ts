@@ -10,6 +10,7 @@ export const MODE_ICONS: Record<string, string> = {
 export const PROVIDER_OPTIONS: Array<{ id: InferenceProvider; label: string; desc: string }> = [
   { id: "anthropic", label: "Anthropic", desc: "Claude models via Anthropic API" },
   { id: "openai", label: "OpenAI", desc: "GPT models via OpenAI API" },
+  { id: "google", label: "Google (Gemini)", desc: "Gemini models via Google AI Studio" },
   { id: "openrouter", label: "OpenRouter", desc: "Unified model routing via OpenRouter" },
   { id: "vertex-anthropic", label: "Google Vertex AI (Claude)", desc: "Claude models via Google Cloud" },
   { id: "vertex-google", label: "Google Vertex AI (Gemini)", desc: "Gemini models via Google Cloud" },
@@ -19,6 +20,7 @@ export const PROVIDER_OPTIONS: Array<{ id: InferenceProvider; label: string; des
 export const MODEL_DEFAULTS: Record<InferenceProvider, string> = {
   "anthropic": "claude-sonnet-4-6",
   "openai": "openai/gpt-5",
+  "google": "google/gemini-3.1-pro-preview",
   "openrouter": "openrouter/auto",
   "vertex-anthropic": "anthropic-vertex/claude-sonnet-4-6",
   "vertex-google": "google-vertex/gemini-2.5-pro",
@@ -28,6 +30,7 @@ export const MODEL_DEFAULTS: Record<InferenceProvider, string> = {
 export const MODEL_HINTS: Record<InferenceProvider, string> = {
   "anthropic": "Examples: claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5",
   "openai": "Examples: openai/gpt-5, openai/gpt-5.3",
+  "google": "Examples: google/gemini-3.1-pro-preview, google/gemini-2.5-flash",
   "openrouter": "Examples: openrouter/auto, openrouter/anthropic/claude-sonnet-4-6",
   "vertex-anthropic": "Examples: anthropic-vertex/claude-sonnet-4-6, anthropic-vertex/claude-opus-4-6",
   "vertex-google": "Examples: google-vertex/gemini-2.5-pro, google-vertex/gemini-2.5-flash",

@@ -6,6 +6,7 @@ export interface PodmanSecretMapping {
 export const DEFAULT_PROVIDER_PODMAN_SECRET_MAPPINGS: PodmanSecretMapping[] = [
   { secretName: "anthropic_api_key", targetEnv: "ANTHROPIC_API_KEY" },
   { secretName: "openai_api_key", targetEnv: "OPENAI_API_KEY" },
+  { secretName: "gemini_api_key", targetEnv: "GEMINI_API_KEY" },
   { secretName: "openrouter_api_key", targetEnv: "OPENROUTER_API_KEY" },
   { secretName: "model_endpoint_api_key", targetEnv: "MODEL_ENDPOINT_API_KEY" },
 ];
