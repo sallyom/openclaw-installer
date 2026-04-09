@@ -136,7 +136,7 @@ export async function isClusterReachable(): Promise<boolean> {
       },
     });
     return true;
-  } catch (err) {
+  } catch (_err) {
     // 401/403 from the auth check means the cluster is reachable but the
     // user is logged out or the token expired.
     // Connection-level errors (ECONNREFUSED, DNS) mean no cluster at all.

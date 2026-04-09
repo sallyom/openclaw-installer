@@ -303,7 +303,7 @@ export function deploymentManifest(
   skillEntries: TreeEntry[] = [],
   agentTreeEntries: TreeEntry[] = [],
   cronJobsContent?: string,
-  execApprovalsContent?: string,
+  _execApprovalsContent?: string,
 ): k8s.V1Deployment {
   const image = defaultImage(config);
   const id = agentId(config);
