@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import type { DeployConfig, DeployModelOption, DeploySecretRef } from "./types.js";
 import { shouldUseLitellmProxy, litellmModelName, litellmRegisteredModelNames, LITELLM_PORT } from "./litellm.js";
 import { shouldUseOtel, OTEL_HTTP_PORT } from "./otel.js";
+import { shouldUseChromiumSidecar, CHROMIUM_CDP_PORT } from "./chromium.js";
 import { buildSandboxConfig } from "./sandbox.js";
 import { buildSandboxToolPolicy } from "./tool-policy.js";
 import { loadAgentSourceBundle, loadAgentSourceMcpServers } from "./agent-source.js";
@@ -753,6 +754,21 @@ export function buildOpenClawConfig(config: DeployConfig, gatewayToken: string):
     },
     cron: { enabled: !!config.cronEnabled },
   };
+
+  // Add browser config for Chromium sidecar
+  if (shouldUseChromiumSidecar(config)) {
+    ocConfig.browser = {
+      enabled: true,
+      defaultProfile: "openclaw",
+      profiles: {
+        openclaw: {
+          cdpUrl: `http://localhost:${CHROMIUM_CDP_PORT}`,
+          attachOnly: true,
+          color: "#4285F4",
+        },
+      },
+    };
+  }
 
   const sandboxToolPolicy = buildSandboxToolPolicy(config);
   if (sandboxToolPolicy) {

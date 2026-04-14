@@ -883,6 +883,21 @@ function buildOpenClawConfig(config: DeployConfig, gatewayToken: string): string
     cron: { enabled: !!config.cronEnabled },
   };
 
+  // Add browser config for Chromium sidecar
+  if (shouldUseChromiumSidecar(config)) {
+    ocConfig.browser = {
+      enabled: true,
+      defaultProfile: "openclaw",
+      profiles: {
+        openclaw: {
+          cdpUrl: `http://localhost:${CHROMIUM_CDP_PORT}`,
+          attachOnly: true,
+          color: "#4285F4",
+        },
+      },
+    };
+  }
+
   const sandboxToolPolicy = buildSandboxToolPolicy(config);
   if (sandboxToolPolicy) {
     ocConfig.tools = sandboxToolPolicy;
