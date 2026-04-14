@@ -133,6 +133,8 @@ export function parseSavedLocalInstanceConfig(savedVars: Record<string, string>)
     otelEndpoint: savedVars.OTEL_ENDPOINT || undefined,
     otelExperimentId: savedVars.OTEL_EXPERIMENT_ID || undefined,
     otelImage: savedVars.OTEL_IMAGE || undefined,
+    chromiumSidecar: savedVars.CHROMIUM_SIDECAR === "true" || undefined,
+    chromiumImage: savedVars.CHROMIUM_IMAGE || undefined,
     telegramBotToken: savedVars.TELEGRAM_BOT_TOKEN || undefined,
     telegramAllowFrom: savedVars.TELEGRAM_ALLOW_FROM || undefined,
     sandboxEnabled: savedVars.SANDBOX_ENABLED === "true" || undefined,
