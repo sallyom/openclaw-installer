@@ -68,33 +68,42 @@ function normalizeStringArray(arr: string[] | undefined): string[] | undefined {
   return normalized.length > 0 ? normalized : undefined;
 }
 
-export function applyServerEnvFallbacks(config: DeployConfig, env: NodeJS.ProcessEnv = process.env): void {
+export function applyServerEnvFallbacks(
+  config: DeployConfig,
+  env: NodeJS.ProcessEnv = process.env,
+  selectedProviders?: string[],
+): void {
+  const sel = (p: string) => !selectedProviders || selectedProviders.includes(p);
   if (!config.image && env.OPENCLAW_IMAGE) {
     config.image = env.OPENCLAW_IMAGE;
   }
   if (
-    !config.anthropicApiKey
+    sel("anthropic")
+    && !config.anthropicApiKey
     && !config.anthropicApiKeyRef
     && env.ANTHROPIC_API_KEY
   ) {
     config.anthropicApiKey = env.ANTHROPIC_API_KEY;
   }
   if (
-    !config.openaiApiKey
+    sel("openai")
+    && !config.openaiApiKey
     && !config.openaiApiKeyRef
     && env.OPENAI_API_KEY
   ) {
     config.openaiApiKey = env.OPENAI_API_KEY;
   }
   if (
-    !config.googleApiKey
+    sel("google")
+    && !config.googleApiKey
     && !config.googleApiKeyRef
     && (env.GEMINI_API_KEY || env.GOOGLE_API_KEY)
   ) {
     config.googleApiKey = env.GEMINI_API_KEY || env.GOOGLE_API_KEY;
   }
   if (
-    !config.openrouterApiKey
+    sel("openrouter")
+    && !config.openrouterApiKey
     && !config.openrouterApiKeyRef
     && env.OPENROUTER_API_KEY
   ) {
@@ -128,7 +137,8 @@ export function applyServerEnvFallbacks(config: DeployConfig, env: NodeJS.Proces
 }
 
 router.post("/", async (req, res) => {
-  const config = req.body as DeployConfig;
+  const { selectedProviders, ...configBody } = req.body as DeployConfig & { selectedProviders?: string[] };
+  const config = configBody as DeployConfig;
 
   config.image = trimOptional(config.image);
   config.modelEndpoint = trimOptional(config.modelEndpoint);
@@ -254,7 +264,8 @@ router.post("/", async (req, res) => {
   }
 
   // Fall back to server environment for image and credentials.
-  applyServerEnvFallbacks(config);
+  // Only inject env keys for providers the client explicitly selected.
+  applyServerEnvFallbacks(config, process.env, selectedProviders);
 
   if (!config.inferenceProvider) {
     if (config.vertexEnabled) {

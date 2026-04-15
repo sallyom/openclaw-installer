@@ -464,6 +464,7 @@ export function buildDeployRequestBody(params: {
   return {
     mode,
     inferenceProvider,
+    selectedProviders,
     prefix: config.prefix,
     agentName: config.agentName,
     agentDisplayName: config.agentDisplayName || config.agentName,

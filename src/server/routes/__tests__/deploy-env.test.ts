@@ -96,4 +96,36 @@ describe("applyServerEnvFallbacks", () => {
     expect(config.openaiApiKey).toBe("sk-openai-env");
     expect(config.modelEndpointApiKey).toBe("endpoint-token");
   });
+
+  it("skips env fallbacks for providers not in selectedProviders", () => {
+    const config = makeConfig({
+      inferenceProvider: "vertex-anthropic",
+    });
+
+    applyServerEnvFallbacks(config, {
+      ANTHROPIC_API_KEY: "sk-ant-env",
+      GEMINI_API_KEY: "gemini-env",
+      OPENAI_API_KEY: "sk-openai-env",
+    }, ["vertex-anthropic"]);
+
+    expect(config.anthropicApiKey).toBeUndefined();
+    expect(config.googleApiKey).toBeUndefined();
+    expect(config.openaiApiKey).toBeUndefined();
+  });
+
+  it("hydrates env fallbacks only for selected providers", () => {
+    const config = makeConfig({
+      inferenceProvider: "anthropic",
+    });
+
+    applyServerEnvFallbacks(config, {
+      ANTHROPIC_API_KEY: "sk-ant-env",
+      OPENAI_API_KEY: "sk-openai-env",
+      GEMINI_API_KEY: "gemini-env",
+    }, ["anthropic", "openai"]);
+
+    expect(config.anthropicApiKey).toBe("sk-ant-env");
+    expect(config.openaiApiKey).toBe("sk-openai-env");
+    expect(config.googleApiKey).toBeUndefined();
+  });
 });
