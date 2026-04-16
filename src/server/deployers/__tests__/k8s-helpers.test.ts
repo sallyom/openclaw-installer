@@ -98,6 +98,47 @@ describe("model config generation", () => {
     expect(deriveModel(config)).toBe("google/gemini-3.1-pro-preview");
   });
 
+  it("uses the endpoint model as primary for custom endpoints even when agentModel is present", () => {
+    const config = makeConfig({
+      inferenceProvider: "custom-endpoint",
+      agentModel: "claude-sonnet-4-6",
+      modelEndpoint: "http://localhost:8080/v1",
+      modelEndpointModel: "local-model",
+    });
+
+    expect(deriveModel(config)).toBe("endpoint/local-model");
+  });
+
+  it("normalizes slash-containing endpoint model ids under the endpoint provider", () => {
+    const config = makeConfig({
+      inferenceProvider: "custom-endpoint",
+      modelEndpoint: "http://localhost:8080/v1",
+      modelEndpointModel: "google/gemma-4-E2B-it",
+    });
+
+    expect(normalizeModelRef(config, "google/gemma-4-E2B-it")).toBe("endpoint/google/gemma-4-E2B-it");
+    expect(normalizeModelRef(config, "endpoint/google/gemma-4-E2B-it")).toBe("endpoint/google/gemma-4-E2B-it");
+    expect(deriveModel(config)).toBe("endpoint/google/gemma-4-E2B-it");
+  });
+
+  it("publishes slash-containing endpoint model ids as endpoint provider refs", () => {
+    const config = makeConfig({
+      inferenceProvider: "custom-endpoint",
+      modelEndpoint: "http://localhost:8080/v1",
+      modelEndpointModel: "google/gemma-4-E2B-it",
+    });
+
+    const rendered = buildOpenClawConfig(config, "gateway-token") as {
+      agents?: {
+        defaults?: {
+          model?: { primary?: string };
+        };
+      };
+    };
+
+    expect(rendered.agents?.defaults?.model?.primary).toBe("endpoint/google/gemma-4-E2B-it");
+  });
+
   it("publishes only the configured default model in the agent catalog", () => {
     const config = makeConfig({
       anthropicApiKey: "test-key",
@@ -495,6 +536,29 @@ describe("model config generation", () => {
     expect(rendered.secrets?.providers).toMatchObject({
       default: { source: "env" },
     });
+  });
+
+  it("uses the local no-auth marker for unauthenticated model endpoints", () => {
+    const config = makeConfig({
+      inferenceProvider: "custom-endpoint",
+      openaiApiKey: "openai-key",
+      modelEndpoint: "http://localhost:8080/v1",
+      modelEndpointModel: "local-model",
+    });
+
+    const rendered = buildOpenClawConfig(config, "gateway-token") as {
+      models?: {
+        providers?: Record<string, {
+          apiKey?: unknown;
+          baseUrl?: string;
+          api?: string;
+        }>;
+      };
+    };
+
+    expect(rendered.models?.providers?.endpoint?.baseUrl).toBe("http://localhost:8080/v1");
+    expect(rendered.models?.providers?.endpoint?.api).toBe("openai-completions");
+    expect(rendered.models?.providers?.endpoint?.apiKey).toBeUndefined();
   });
 
   it("adds installer-provided provider models to the OpenClaw picker allowlist", () => {

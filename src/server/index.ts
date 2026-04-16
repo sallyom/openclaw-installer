@@ -22,6 +22,7 @@ import { loadPlugins, getDisabledModes } from "./plugins/loader.js";
 import {
   installerBindHost,
   installerDisplayHost,
+  installerPort,
   sanitizeSavedConfigVars,
   validateUserSuppliedPath,
 } from "./security.js";
@@ -55,7 +56,7 @@ console.log(`Plugins loaded. Registered deployers: ${registry.list().map(r => r.
 
 const app = express();
 const server = createServer(app);
-const PORT = parseInt(process.env.PORT ?? "3000", 10);
+const PORT = installerPort();
 const BIND_HOST = installerBindHost();
 
 app.use(express.json());

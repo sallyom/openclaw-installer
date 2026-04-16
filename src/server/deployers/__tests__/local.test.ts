@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { applyGatewayRuntimeConfig, parseContainerRunArgs, shouldAlwaysPull } from "../local.js";
+import {
+  applyGatewayRuntimeConfig,
+  parseContainerRunArgs,
+  resolveLocalRuntimeModelEndpoint,
+  shouldAlwaysPull,
+} from "../local.js";
 
 describe("shouldAlwaysPull", () => {
   it("returns true for :latest tag", () => {
@@ -89,6 +94,27 @@ describe("applyGatewayRuntimeConfig", () => {
 
     expect(updated.gateway?.http?.endpoints?.chatCompletions?.enabled).toBe(false);
     expect(updated.gateway?.http?.endpoints?.responses?.enabled).toBe(false);
+  });
+});
+
+describe("resolveLocalRuntimeModelEndpoint", () => {
+  it("rewrites localhost endpoints for podman containers", () => {
+    expect(resolveLocalRuntimeModelEndpoint("http://localhost:8080/v1", "podman"))
+      .toBe("http://host.containers.internal:8080/v1");
+    expect(resolveLocalRuntimeModelEndpoint("http://127.0.0.1:8080/v1", "podman"))
+      .toBe("http://host.containers.internal:8080/v1");
+  });
+
+  it("rewrites localhost endpoints for docker containers", () => {
+    expect(resolveLocalRuntimeModelEndpoint("http://localhost:8080/v1", "docker"))
+      .toBe("http://host.docker.internal:8080/v1");
+  });
+
+  it("leaves already-routable endpoints unchanged", () => {
+    expect(resolveLocalRuntimeModelEndpoint("http://host.containers.internal:8080/v1", "podman"))
+      .toBe("http://host.containers.internal:8080/v1");
+    expect(resolveLocalRuntimeModelEndpoint("http://10.0.0.20:8080/v1", "podman"))
+      .toBe("http://10.0.0.20:8080/v1");
   });
 });
 

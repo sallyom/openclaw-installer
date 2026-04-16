@@ -2,7 +2,6 @@ import React, { useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import {
   MODEL_DEFAULTS,
-  MODEL_HINTS,
   PROVIDER_OPTIONS,
 } from "./constants.js";
 import type {
@@ -1115,7 +1114,7 @@ export function ProviderSection({
                 onChange={(e) => update("modelEndpointApiKey", e.target.value)}
               />
               <div className="hint">
-                Separate from <code>OPENAI_API_KEY</code>. Use this when your OpenAI-compatible endpoint requires its own token.
+                Separate from <code>OPENAI_API_KEY</code>. Leave blank for local endpoints that do not require auth.
               </div>
               <div className="hint" style={{ marginTop: "0.35rem" }}>
                 {secretInputPreferenceHint(mode)}
@@ -1157,24 +1156,6 @@ export function ProviderSection({
             {PROVIDER_OPTIONS.find((p) => p.id === inferenceProvider)?.desc}. This controls the default primary route for the deployment.
           </div>
         </div>
-
-        {/* Show Primary Model field for custom endpoint only — Anthropic/OpenAI/Vertex have their own model fields */}
-        {inferenceProvider === "custom-endpoint" && (
-          <div className="form-group" style={{ marginTop: "0.75rem" }}>
-            <label>Primary Model</label>
-            <input
-              type="text"
-              placeholder={MODEL_DEFAULTS[inferenceProvider] || "model-id"}
-              value={config.agentModel}
-              onChange={(e) => update("agentModel", e.target.value)}
-            />
-            <div className="hint">
-              {config.agentModel
-                ? "Custom primary model override"
-                : `Leave blank for default${MODEL_DEFAULTS[inferenceProvider] ? ` (${MODEL_DEFAULTS[inferenceProvider]})` : ""}. ${MODEL_HINTS[inferenceProvider]}`}
-            </div>
-          </div>
-        )}
 
         <div className="form-group" style={{ marginTop: "0.75rem" }}>
           <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>

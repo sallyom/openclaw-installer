@@ -441,6 +441,7 @@ describe("DeployForm agent name validation (issue #7)", () => {
     expect(screen.getByText("OpenAI-Compatible Model Endpoint")).toBeTruthy();
     expect(screen.getByText("OpenAI-Compatible Model Name")).toBeTruthy();
     expect(screen.getByText("OpenAI-Compatible Endpoint API Key (`MODEL_ENDPOINT_API_KEY`)")).toBeTruthy();
+    expect(screen.queryByText("Primary Model")).toBeNull();
   });
 
   it("submits Anthropic and OpenAI credentials together while keeping one primary provider", async () => {

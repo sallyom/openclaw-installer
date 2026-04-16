@@ -98,3 +98,16 @@ export function installerBindHost(env: NodeJS.ProcessEnv = process.env): string 
 export function installerDisplayHost(bindHost: string): string {
   return bindHost === "0.0.0.0" ? "localhost" : bindHost;
 }
+
+function parsePort(value: string | undefined): number | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const port = Number.parseInt(trimmed, 10);
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : undefined;
+}
+
+export function installerPort(env: NodeJS.ProcessEnv = process.env): number {
+  return parsePort(env.OPENCLAW_INSTALLER_PORT) ?? 3000;
+}

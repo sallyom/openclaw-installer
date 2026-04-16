@@ -32,7 +32,7 @@ import {
   LITELLM_IMAGE,
   LITELLM_PORT,
 } from "./litellm.js";
-import { shouldUseOtel, OTEL_HTTP_PORT } from "./otel.js";
+import { resolveEndpointForContainer, shouldUseOtel, OTEL_HTTP_PORT } from "./otel.js";
 import { startOtelSidecar, stopOtelSidecar, startJaegerSidecar, otelContainerName, jaegerContainerName } from "./local-otel.js";
 import { JAEGER_UI_PORT } from "./otel.js";
 import { shouldUseChromiumSidecar, CHROMIUM_IMAGE, CHROMIUM_CDP_PORT, chromiumContainerName, chromiumAgentEnv } from "./chromium.js";
@@ -59,6 +59,10 @@ import { buildPodmanSecretRunArgs, hasPodmanSecretTarget } from "../../shared/po
 const DEFAULT_IMAGE = process.env.OPENCLAW_IMAGE || "ghcr.io/openclaw/openclaw:latest";
 const DEFAULT_VERTEX_IMAGE = process.env.OPENCLAW_VERTEX_IMAGE || DEFAULT_IMAGE;
 const DEFAULT_PORT = 18789;
+
+export function resolveLocalRuntimeModelEndpoint(endpoint: string, runtime?: ContainerRuntime | string): string {
+  return resolveEndpointForContainer(endpoint, runtime);
+}
 const GCP_SA_CONTAINER_PATH = "/home/node/.openclaw/gcp/sa.json";
 const LITELLM_CONFIG_PATH = "/home/node/.openclaw/litellm/config.yaml";
 const LITELLM_KEY_PATH = "/home/node/.openclaw/litellm/master-key";
@@ -421,6 +425,11 @@ function prepareLocalSandboxSshConfig(config: DeployConfig): {
  * Derive the model ID based on configured provider.
  */
 function deriveModel(config: DeployConfig): string {
+  if (config.inferenceProvider === "custom-endpoint") {
+    return config.modelEndpointModel?.trim()
+      ? normalizeModelRef(config, config.modelEndpointModel)
+      : `${CUSTOM_ENDPOINT_PROVIDER}/default`;
+  }
   if (config.agentModel) {
     return normalizeModelRef(config, config.agentModel);
   }
@@ -435,11 +444,6 @@ function deriveModel(config: DeployConfig): string {
   }
   if (config.inferenceProvider === OPENROUTER_PROVIDER) {
     return normalizeModelRef(config, config.openrouterModel?.trim() || "auto");
-  }
-  if (config.inferenceProvider === "custom-endpoint") {
-    return config.modelEndpointModel?.trim()
-      ? normalizeModelRef(config, config.modelEndpointModel)
-      : `${CUSTOM_ENDPOINT_PROVIDER}/default`;
   }
   if (config.inferenceProvider === "vertex-anthropic") {
     const model = config.vertexAnthropicModel?.trim() || config.agentModel?.trim() || "claude-sonnet-4-6";
@@ -676,18 +680,15 @@ function attachSecretHandlingConfig(ocConfig: Record<string, unknown>, config: D
     providersMap[OPENROUTER_PROVIDER] = openrouterProvider;
   }
   if (config.modelEndpoint?.trim()) {
-    const providerApiKeyRef = modelEndpointApiKeyRef || openaiApiKeyRef;
     const endpointProvider: Record<string, unknown> = {
       ...((providersMap[CUSTOM_ENDPOINT_PROVIDER] as Record<string, unknown> | undefined) || {}),
-      baseUrl: config.modelEndpoint.trim(),
+      baseUrl: resolveLocalRuntimeModelEndpoint(config.modelEndpoint.trim(), config.containerRuntime),
       api: "openai-completions",
       models: Array.isArray((providersMap[CUSTOM_ENDPOINT_PROVIDER] as Record<string, unknown> | undefined)?.models)
         ? (providersMap[CUSTOM_ENDPOINT_PROVIDER] as Record<string, unknown>).models
         : [],
     };
-    if (providerApiKeyRef) {
-      endpointProvider.apiKey = cloneSecretRef(providerApiKeyRef);
-    }
+    endpointProvider.apiKey = modelEndpointApiKeyRef ? cloneSecretRef(modelEndpointApiKeyRef) : undefined;
     if (config.modelEndpointModel?.trim()) {
       const modelId = config.modelEndpointModel.trim();
       endpointProvider.models = [{ id: modelId, name: config.modelEndpointModelLabel?.trim() || modelId }];
@@ -1161,7 +1162,7 @@ function buildRunArgs(
     env[openrouterEnvRefId] = effectiveConfig.openrouterApiKey;
   }
   if (effectiveConfig.modelEndpoint) {
-    env.MODEL_ENDPOINT = effectiveConfig.modelEndpoint;
+    env.MODEL_ENDPOINT = resolveLocalRuntimeModelEndpoint(effectiveConfig.modelEndpoint, runtime);
   }
   if (effectiveConfig.modelEndpointApiKey) {
     env.MODEL_ENDPOINT_API_KEY = effectiveConfig.modelEndpointApiKey;
@@ -1283,6 +1284,7 @@ export class LocalDeployer implements Deployer {
       runtime,
       log,
     );
+    const runtimeConfig: DeployConfig = { ...activeConfig, containerRuntime: runtime };
 
     const agentId = `${config.prefix || "openclaw"}_${config.agentName}`;
     const workspaceDir = `/home/node/.openclaw/workspace-${agentId}`;
@@ -1290,13 +1292,13 @@ export class LocalDeployer implements Deployer {
 
     // Build init script: write config + workspace files on first deploy
     const gatewayToken = generateToken();
-    const ocConfig = buildOpenClawConfig(activeConfig, gatewayToken);
+    const ocConfig = buildOpenClawConfig(runtimeConfig, gatewayToken);
 
     // Fix for #67: warn when bundle subagent models reference unavailable providers
     if (sourceBundle?.agents) {
-      const deployModel = deriveModel(activeConfig);
+      const deployModel = deriveModel(runtimeConfig);
       for (const entry of sourceBundle.agents) {
-        if (entry.model?.primary && detectUnavailableProvider(entry.model.primary, activeConfig)) {
+        if (entry.model?.primary && detectUnavailableProvider(entry.model.primary, runtimeConfig)) {
           log(`WARNING: Subagent "${entry.id}" prefers model "${entry.model.primary}" but that provider does not appear to be configured. The deploy-time model "${deployModel}" has been added as a fallback.`);
         }
       }
@@ -1731,7 +1733,7 @@ Use this table to track verified peer OpenClaw instances.
       }
     }
 
-    const runArgs = buildRunArgs(activeConfig, runtime, name, port, litellmMasterKey, otelEnv);
+    const runArgs = buildRunArgs(runtimeConfig, runtime, name, port, litellmMasterKey, otelEnv);
 
     log(`Starting OpenClaw container: ${name}`);
     const run = await runCommand(runtime, runArgs, log);
@@ -1772,7 +1774,7 @@ Use this table to track verified peer OpenClaw instances.
     }
 
     // Extract and save gateway token to host filesystem
-    await this.saveInstanceInfo(runtime, name, activeConfig, log, gatewayToken);
+    await this.saveInstanceInfo(runtime, name, runtimeConfig, log, gatewayToken);
 
     const url = `http://localhost:${port}`;
     log(`OpenClaw running at ${url}`);
@@ -1782,7 +1784,7 @@ Use this table to track verified peer OpenClaw instances.
       id,
       mode: "local",
       status: "running",
-      config: { ...activeConfig, containerRuntime: runtime },
+      config: runtimeConfig,
       startedAt: new Date().toISOString(),
       url,
       containerId: name,
@@ -1798,18 +1800,19 @@ Use this table to track verified peer OpenClaw instances.
       runtime,
       log,
     );
-    const name = result.containerId ?? containerName(effectiveConfig);
-    const port = effectiveConfig.port ?? DEFAULT_PORT;
-    const image = resolveImage(effectiveConfig);
-    const vol = result.volumeName ?? volumeName(effectiveConfig);
+    const runtimeConfig: DeployConfig = { ...effectiveConfig, containerRuntime: runtime };
+    const name = result.containerId ?? containerName(runtimeConfig);
+    const port = runtimeConfig.port ?? DEFAULT_PORT;
+    const image = resolveImage(runtimeConfig);
+    const vol = result.volumeName ?? volumeName(runtimeConfig);
     const isContainerized = existsSync("/.dockerenv") || existsSync("/run/.containerenv");
 
     // Copy updated agent files from host into volume before starting
-      const agentId = `${effectiveConfig.prefix || "openclaw"}_${effectiveConfig.agentName}`;
-    const agentSourceDir = normalizeHostPath(effectiveConfig.agentSourceDir) || defaultAgentSourceDir(isContainerized);
+      const agentId = `${runtimeConfig.prefix || "openclaw"}_${runtimeConfig.agentName}`;
+    const agentSourceDir = normalizeHostPath(runtimeConfig.agentSourceDir) || defaultAgentSourceDir(isContainerized);
 
     const bootstrapGatewayToken = await this.readSavedToken(name) || generateToken();
-    const ocConfig = buildOpenClawConfig(effectiveConfig, bootstrapGatewayToken);
+    const ocConfig = buildOpenClawConfig(runtimeConfig, bootstrapGatewayToken);
     const ocConfigB64 = Buffer.from(ocConfig).toString("base64");
     const bootstrapResult = await runCommand(runtime, [
       "run", "--rm",
@@ -2081,16 +2084,13 @@ Use this table to track verified peer OpenClaw instances.
     }
 
     log(`Starting OpenClaw container: ${name}`);
-    const runArgs = buildRunArgs(effectiveConfig, runtime, name, port, litellmMasterKey, otelEnv);
+    const runArgs = buildRunArgs(runtimeConfig, runtime, name, port, litellmMasterKey, otelEnv);
     const run = await runCommand(runtime, runArgs, log);
     if (run.code !== 0) {
       throw new Error("Failed to start container");
     }
 
-    const persistedConfig = {
-      ...effectiveConfig,
-      containerRuntime: runtime,
-    };
+    const persistedConfig = runtimeConfig;
     if (bootstrapGatewayToken) {
       await this.saveInstanceInfo(runtime, name, persistedConfig, log, bootstrapGatewayToken);
     } else {

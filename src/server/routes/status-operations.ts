@@ -14,6 +14,20 @@ import { decodeSavedJson, readSavedConfig, readSavedGatewayToken } from "./statu
 
 const execFileAsync = promisify(execFile);
 
+interface DeviceCommandResult {
+  stdout: string;
+  stderr: string;
+}
+
+interface PendingDevicePairingRequest {
+  requestId?: unknown;
+  ts?: unknown;
+}
+
+interface DevicePairingList {
+  pending?: PendingDevicePairingRequest[];
+}
+
 async function findRunningLocalContainer(name: string): Promise<{
   runtime: ContainerRuntime;
   container: DiscoveredContainer;
@@ -41,51 +55,86 @@ async function getOpenClawPodName(namespace: string): Promise<string | null> {
   return podList.items[0]?.metadata?.name || null;
 }
 
+function parseDevicePairingList(stdout: string): DevicePairingList {
+  try {
+    const parsed = JSON.parse(stdout) as DevicePairingList;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    throw new Error(`Failed to parse device pairing list JSON: ${stdout}`);
+  }
+}
+
+export function selectLatestPendingDeviceRequestId(list: DevicePairingList): string | null {
+  const pending = Array.isArray(list.pending) ? list.pending : [];
+  const selected = pending.reduce<PendingDevicePairingRequest | null>((latest, current) => {
+    if (!latest) {
+      return current;
+    }
+    const latestTs = typeof latest.ts === "number" ? latest.ts : 0;
+    const currentTs = typeof current.ts === "number" ? current.ts : 0;
+    return currentTs > latestTs ? current : latest;
+  }, null);
+  return typeof selected?.requestId === "string" && selected.requestId.trim()
+    ? selected.requestId.trim()
+    : null;
+}
+
+async function createDeviceCommandRunner(instance: DeployResult): Promise<(args: string[]) => Promise<DeviceCommandResult>> {
+  if (instance.mode === "local") {
+    const running = await findRunningLocalContainer(instance.id);
+    if (!running) {
+      throw new Error("Instance must be running to approve pairing");
+    }
+
+    return async (args: string[]) => {
+      const result = await execFileAsync(running.runtime, [
+        "exec",
+        instance.id,
+        "openclaw",
+        "devices",
+        ...args,
+      ]);
+      return {
+        stdout: result.stdout.trim(),
+        stderr: result.stderr.trim(),
+      };
+    };
+  }
+
+  const namespace = instance.config.namespace || instance.containerId || "";
+  const podName = await getOpenClawPodName(namespace);
+  if (!podName) {
+    throw new Error("No running pod found to approve pairing");
+  }
+
+  return async (args: string[]) => execInPod(
+    namespace,
+    podName,
+    "gateway",
+    ["openclaw", "devices", ...args],
+  );
+}
+
 export async function approveLatestDevicePairing(instance: DeployResult): Promise<{
   status: "approved" | "noop";
   output?: string;
   error?: string;
 }> {
   try {
-    let stdout = "";
-    let stderr = "";
-
-    if (instance.mode === "local") {
-      const running = await findRunningLocalContainer(instance.id);
-      if (!running) {
-        throw new Error("Instance must be running to approve pairing");
-      }
-
-      const result = await execFileAsync(running.runtime, [
-        "exec",
-        instance.id,
-        "openclaw",
-        "devices",
-        "approve",
-        "--latest",
-      ]);
-      stdout = result.stdout.trim();
-      stderr = result.stderr.trim();
-    } else {
-      const namespace = instance.config.namespace || instance.containerId || "";
-      const podName = await getOpenClawPodName(namespace);
-      if (!podName) {
-        throw new Error("No running pod found to approve pairing");
-      }
-
-      const result = await execInPod(
-        namespace,
-        podName,
-        "gateway",
-        ["openclaw", "devices", "approve", "--latest"],
-      );
-      stdout = result.stdout;
-      stderr = result.stderr;
+    const runDeviceCommand = await createDeviceCommandRunner(instance);
+    const listResult = await runDeviceCommand(["list", "--json"]);
+    const requestId = selectLatestPendingDeviceRequestId(parseDevicePairingList(listResult.stdout));
+    if (!requestId) {
+      return {
+        status: "noop",
+        error: "No pending device pairing requests",
+      };
     }
 
+    const { stdout, stderr } = await runDeviceCommand(["approve", requestId, "--json"]);
     return {
       status: "approved",
-      output: [stdout, stderr].filter(Boolean).join("").trim(),
+      output: [stdout, stderr].filter(Boolean).join("\n").trim(),
     };
   } catch (err) {
     const execError = err as Error & { stdout?: string; stderr?: string };

@@ -76,6 +76,9 @@ export function normalizeModelRef(config: DeployConfig, modelRef: string): strin
   if (config.inferenceProvider === OPENROUTER_PROVIDER) {
     return trimmed.startsWith(`${OPENROUTER_PROVIDER}/`) ? trimmed : `${OPENROUTER_PROVIDER}/${trimmed}`;
   }
+  if (config.inferenceProvider === "custom-endpoint") {
+    return trimmed.startsWith(`${CUSTOM_ENDPOINT_PROVIDER}/`) ? trimmed : `${CUSTOM_ENDPOINT_PROVIDER}/${trimmed}`;
+  }
   if (trimmed.includes("/")) return trimmed;
 
   if (config.inferenceProvider === "anthropic") return `anthropic/${trimmed}`;
@@ -84,9 +87,6 @@ export function normalizeModelRef(config: DeployConfig, modelRef: string): strin
   }
   if (config.inferenceProvider === GOOGLE_PROVIDER) {
     return `${GOOGLE_PROVIDER}/${trimmed}`;
-  }
-  if (config.inferenceProvider === "custom-endpoint") {
-    return `${CUSTOM_ENDPOINT_PROVIDER}/${trimmed}`;
   }
   // Fix for #1: check litellm proxy before falling back to direct vertex providers
   if (config.inferenceProvider === "vertex-anthropic") {
@@ -267,6 +267,11 @@ function buildAgentModelConfig(config: DeployConfig, primaryModelRef: string): {
 }
 
 export function deriveModel(config: DeployConfig): string {
+  if (config.inferenceProvider === "custom-endpoint") {
+    return config.modelEndpointModel?.trim()
+      ? normalizeModelRef(config, config.modelEndpointModel)
+      : `${CUSTOM_ENDPOINT_PROVIDER}/default`;
+  }
   if (config.agentModel) return normalizeModelRef(config, config.agentModel);
   if (config.inferenceProvider === "anthropic") {
     return `anthropic/${config.anthropicModel?.trim() || "claude-sonnet-4-6"}`;
@@ -279,11 +284,6 @@ export function deriveModel(config: DeployConfig): string {
   }
   if (config.inferenceProvider === OPENROUTER_PROVIDER) {
     return normalizeProviderModelRef(OPENROUTER_PROVIDER, config.openrouterModel) || `${OPENROUTER_PROVIDER}/auto`;
-  }
-  if (config.inferenceProvider === "custom-endpoint") {
-    return config.modelEndpointModel?.trim()
-      ? normalizeModelRef(config, config.modelEndpointModel)
-      : `${CUSTOM_ENDPOINT_PROVIDER}/default`;
   }
   if (config.inferenceProvider === "vertex-anthropic") {
     const model = config.vertexAnthropicModel?.trim() || config.agentModel?.trim() || "claude-sonnet-4-6";
@@ -588,7 +588,6 @@ function attachSecretHandlingConfig(ocConfig: Record<string, unknown>, config: D
     providersMap[OPENROUTER_PROVIDER] = openrouterProvider;
   }
   if (config.modelEndpoint?.trim()) {
-    const providerApiKeyRef = modelEndpointApiKeyRef || openaiApiKeyRef;
     const endpointProvider: Record<string, unknown> = {
       ...((providersMap[CUSTOM_ENDPOINT_PROVIDER] as Record<string, unknown> | undefined) || {}),
       baseUrl: config.modelEndpoint.trim(),
@@ -597,9 +596,7 @@ function attachSecretHandlingConfig(ocConfig: Record<string, unknown>, config: D
         ? (providersMap[CUSTOM_ENDPOINT_PROVIDER] as Record<string, unknown>).models
         : [],
     };
-    if (providerApiKeyRef) {
-      endpointProvider.apiKey = cloneSecretRef(providerApiKeyRef);
-    }
+    endpointProvider.apiKey = modelEndpointApiKeyRef ? cloneSecretRef(modelEndpointApiKeyRef) : undefined;
     if (config.modelEndpointModel?.trim()) {
       const modelId = config.modelEndpointModel.trim();
       endpointProvider.models = [{ id: modelId, name: config.modelEndpointModelLabel?.trim() || modelId }];
