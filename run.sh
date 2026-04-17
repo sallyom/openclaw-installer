@@ -136,6 +136,10 @@ if [ "$RUNTIME" = "podman" ]; then
   PODMAN_VERSION=$(podman version --format '{{.Client.Version}}' 2>/dev/null || echo "0")
   PODMAN_MAJOR=$(echo "$PODMAN_VERSION" | cut -d. -f1)
   if [ "$PODMAN_MAJOR" -lt 5 ] 2>/dev/null; then
+    # Before reporting "upgrade", check if a podman machine exists but is stopped
+    if podman machine list --format '{{.Running}}' 2>/dev/null | grep -qi "false"; then
+      error "Podman machine is not running. Start it with: podman machine start"
+    fi
     error "Podman 5.0+ required (found $PODMAN_VERSION). Please upgrade podman."
   fi
 fi
