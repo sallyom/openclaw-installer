@@ -476,8 +476,8 @@ export function deploymentManifest(
               image,
               imagePullPolicy: "IfNotPresent",
               command: [
-                "node", "dist/index.js", "gateway", "run",
-                "--bind", "lan", "--port", "18789",
+                "sh", "-c",
+                "umask 007 && exec node dist/index.js gateway run --bind lan --port 18789",
               ],
               ports: [
                 { name: "gateway", containerPort: 18789, protocol: "TCP" },

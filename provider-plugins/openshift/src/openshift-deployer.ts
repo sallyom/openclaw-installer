@@ -225,8 +225,8 @@ export class OpenShiftDeployer implements Deployer {
         op: "replace",
         path: "/spec/template/spec/containers/0/command",
         value: [
-          "node", "dist/index.js", "gateway", "run",
-          "--bind", "loopback", "--port", "18789",
+          "sh", "-c",
+          "umask 007 && exec node dist/index.js gateway run --bind loopback --port 18789",
         ],
       },
       // Add oauth-proxy container at the beginning

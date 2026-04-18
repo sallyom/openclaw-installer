@@ -1358,7 +1358,7 @@ function buildRunArgs(
   runArgs.push(image);
 
   // Bind to lan (0.0.0.0) so port mapping works from host into pod/container
-  runArgs.push("node", "dist/index.js", "gateway", "--bind", "lan", "--port", "18789");
+  runArgs.push("sh", "-c", "umask 007 && exec node dist/index.js gateway --bind lan --port 18789");
 
   return runArgs;
 }
