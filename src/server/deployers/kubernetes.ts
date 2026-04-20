@@ -688,7 +688,7 @@ export class KubernetesDeployer implements Deployer {
       },
       {
         op: "replace",
-        path: "/spec/template/spec/volumes/3/configMap",
+        path: "/spec/template/spec/volumes/4/configMap",
         value: {
           name: "openclaw-skills",
           ...(effectiveSkillEntries.length > 0
@@ -698,7 +698,7 @@ export class KubernetesDeployer implements Deployer {
       },
       {
         op: "replace",
-        path: "/spec/template/spec/volumes/4/configMap",
+        path: "/spec/template/spec/volumes/5/configMap",
         value: {
           name: "openclaw-cron",
           ...(cronJobsContent !== undefined
@@ -708,7 +708,7 @@ export class KubernetesDeployer implements Deployer {
       },
       {
         op: "replace",
-        path: "/spec/template/spec/volumes/6/configMap",
+        path: "/spec/template/spec/volumes/7/configMap",
         value: {
           name: "openclaw-agent-tree",
           ...(agentTreeEntries.length > 0
