@@ -286,6 +286,7 @@ mkdir -p /home/node/.openclaw/workspace
 mkdir -p /home/node/.openclaw/skills
 mkdir -p /home/node/.openclaw/cron
 mkdir -p /home/node/.openclaw/workspace-${id}
+touch /home/node/.openclaw/workspace-${id}/.env
 cat > /home/node/.openclaw/bin/openclaw-vault <<'EOF_VAULT_HELPER'
 ${vaultHelperScript}
 EOF_VAULT_HELPER

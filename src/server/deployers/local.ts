@@ -1551,6 +1551,7 @@ Use this table to track verified peer OpenClaw instances.
         : []),
       // Create workspace directory
       `mkdir -p '${workspaceDir}'`,
+      `touch '${workspaceDir}/.env'`,
       // Create skills directory
       `mkdir -p /home/node/.openclaw/skills`,
       // Write AGENTS.md (always update — lets user change agent name/display on re-deploy)
@@ -1969,6 +1970,7 @@ Use this table to track verified peer OpenClaw instances.
         `test -f /home/node/.openclaw/openclaw.json || echo '${ocConfigB64}' | base64 -d > /home/node/.openclaw/openclaw.json`,
         `node -e "const fs=require('fs');const p='/home/node/.openclaw/openclaw.json';const c=JSON.parse(fs.readFileSync(p,'utf8'));c.gateway ||= {};c.gateway.http ||= {};c.gateway.http.endpoints ||= {};c.gateway.http.endpoints.chatCompletions={enabled:${effectiveConfig.openaiCompatibleEndpointsEnabled !== false}};c.gateway.http.endpoints.responses={enabled:${effectiveConfig.openaiCompatibleEndpointsEnabled !== false}};c.gateway.controlUi ||= {};c.gateway.controlUi.allowedOrigins=['http://localhost:${port}','http://127.0.0.1:${port}'];fs.writeFileSync(p,JSON.stringify(c,null,2))"`,
         `mkdir -p /home/node/.openclaw/workspace-${agentId}`,
+        `touch /home/node/.openclaw/workspace-${agentId}/.env`,
         "mkdir -p /home/node/.openclaw/skills",
         runtimeOwnershipFixupCommand(),
       ].join(" && "),
