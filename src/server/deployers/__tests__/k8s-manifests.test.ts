@@ -149,6 +149,24 @@ describe("k8s state sync manifests", () => {
     const deployment = deploymentManifest("openclaw-alpha-openclaw", config);
     expect(deployment.spec?.template?.spec?.serviceAccountName).toBe("openclaw");
   });
+
+  it("volume indices used by redeploy match the deployment manifest order", () => {
+    // Regression test for #131: redeploy() uses hardcoded JSON Patch indices
+    // to update specific volume ConfigMaps. If volumes are reordered or new
+    // volumes are inserted, these indices must be updated to match.
+    const deployment = deploymentManifest("openclaw-alpha-openclaw", config);
+    const volumes = deployment.spec?.template.spec?.volumes ?? [];
+
+    // These are the indices redeploy() patches — keep in sync with kubernetes.ts
+    expect(volumes[4]?.name).toBe("skills-config");
+    expect(volumes[4]?.configMap?.name).toBe("openclaw-skills");
+
+    expect(volumes[5]?.name).toBe("cron-config");
+    expect(volumes[5]?.configMap?.name).toBe("openclaw-cron");
+
+    expect(volumes[7]?.name).toBe("agent-tree-config");
+    expect(volumes[7]?.configMap?.name).toBe("openclaw-agent-tree");
+  });
 });
 
 // Regression test for #62: workspace-shadowman not recognized as main agent workspace
