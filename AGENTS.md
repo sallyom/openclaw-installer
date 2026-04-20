@@ -46,3 +46,7 @@ If you must stop the dev server (only when explicitly asked), do **not** use `ls
 pkill -f "tsx watch src/server/index.ts" 2>/dev/null
 pkill -f "vite --strictPort" 2>/dev/null
 ```
+
+## GitHub CLI
+
+When editing PR descriptions, use `gh api repos/OWNER/REPO/pulls/NUMBER -X PATCH -f body="..."` instead of `gh pr edit --body` — the latter fails on repos with deprecated classic project integrations.
