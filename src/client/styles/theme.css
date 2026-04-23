@@ -324,8 +324,9 @@ body {
 /* Instance list */
 .instance-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
+  gap: 1rem;
   padding: 1rem;
   border-bottom: 1px solid var(--border);
 }
@@ -335,23 +336,30 @@ body {
 }
 
 .instance-info {
-  flex: 1;
+  flex: 1 1 18rem;
+  min-width: 0;
 }
 
 .instance-name {
   font-weight: 600;
   font-size: 0.95rem;
+  overflow-wrap: anywhere;
 }
 
 .instance-meta {
   font-size: 0.8rem;
   color: var(--text-secondary);
   margin-top: 0.15rem;
+  overflow-wrap: anywhere;
 }
 
 .instance-actions {
   display: flex;
+  flex: 1 1 28rem;
+  flex-wrap: wrap;
   gap: 0.5rem;
+  justify-content: flex-end;
+  min-width: 0;
 }
 
 /* Status badges */
