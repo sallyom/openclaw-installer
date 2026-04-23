@@ -89,6 +89,17 @@ export function shouldAlwaysPull(image: string): boolean {
   return !tag || tag === "latest";
 }
 
+/**
+ * Returns runtime-specific pull policy flags for mutable image tags.
+ * Podman supports --pull=newer (smart pull only when remote is newer).
+ * Docker has no equivalent, so we use --pull=missing (pull only if not present locally).
+ * Fix for #137: Docker doesn't support --pull=newer.
+ */
+export function pullPolicyArgs(runtime: string, image: string): string[] {
+  if (!shouldAlwaysPull(image)) return [];
+  return runtime === "podman" ? ["--pull=newer"] : ["--pull=missing"];
+}
+
 export function applyGatewayRuntimeConfig(
   config: Record<string, unknown>,
   port: number,
@@ -1243,8 +1254,10 @@ function buildRunArgs(
     "run",
     "-d",
     "--restart=unless-stopped",
-    // For mutable tags (:latest/untagged), check for newer image at startup (Fix for #28)
-    ...(shouldAlwaysPull(image) ? ["--pull=newer"] : []),
+    // For mutable tags (:latest/untagged), pull if needed (Fix for #28, #137)
+    // Podman: --pull=newer (smart pull only when remote is newer)
+    // Docker: --pull=missing (pull only if not present locally)
+    ...pullPolicyArgs(runtime, image),
     "--name",
     name,
   ];
@@ -1579,6 +1592,7 @@ Use this table to track verified peer OpenClaw instances.
 
     const initArgs = [
       "run", "--rm",
+      "--user", "0",
       ...localStateMountArgs(config),
     ];
 
@@ -1616,6 +1630,7 @@ Use this table to track verified peer OpenClaw instances.
       const saScript = `mkdir -p /home/node/.openclaw/gcp && echo '${b64}' | base64 -d > ${GCP_SA_CONTAINER_PATH} && chmod 600 ${GCP_SA_CONTAINER_PATH} && ${runtimeOwnershipFixupCommand()}`;
       const saResult = await runCommand(runtime, [
         "run", "--rm",
+        "--user", "0",
         ...localStateMountArgs(config),
         image, "sh", "-c", saScript,
       ], log);
@@ -1648,6 +1663,7 @@ Use this table to track verified peer OpenClaw instances.
 
       const litellmInitResult = await runCommand(runtime, [
         "run", "--rm",
+        "--user", "0",
         ...localStateMountArgs(config),
         image, "sh", "-c", litellmScript,
       ], log);
@@ -1961,6 +1977,7 @@ Use this table to track verified peer OpenClaw instances.
     const ocConfigB64 = Buffer.from(ocConfig).toString("base64");
     const bootstrapResult = await runCommand(runtime, [
       "run", "--rm",
+      "--user", "0",
       ...localStateMountArgs(effectiveConfig),
       image,
       "sh",
@@ -1995,6 +2012,7 @@ Use this table to track verified peer OpenClaw instances.
       const b64 = Buffer.from(effectiveConfig.gcpServiceAccountJson).toString("base64");
       const gcpResult = await runCommand(runtime, [
         "run", "--rm",
+        "--user", "0",
         ...localStateMountArgs(effectiveConfig),
         image,
         "sh",
@@ -2030,6 +2048,7 @@ Use this table to track verified peer OpenClaw instances.
 
       const copyResult = await runCommand(runtime, [
         "run", "--rm",
+        "--user", "0",
         ...localStateMountArgs(effectiveConfig),
         "-v", bindMountSpec(agentSourceDir, "/tmp/agent-source", "ro"),
         image, "sh", "-c", copyScript,
@@ -2064,6 +2083,7 @@ Use this table to track verified peer OpenClaw instances.
 
     const sshMaterialResult = await runCommand(runtime, [
       "run", "--rm",
+      "--user", "0",
       ...localStateMountArgs(effectiveConfig),
       image, "sh", "-c", sshMaterialScript,
     ], log);
@@ -2101,6 +2121,7 @@ Use this table to track verified peer OpenClaw instances.
         const keyB64 = Buffer.from(litellmMasterKey).toString("base64");
         const litellmRewriteResult = await runCommand(runtime, [
           "run", "--rm",
+          "--user", "0",
           ...localStateMountArgs(effectiveConfig),
           image, "sh", "-c",
           `mkdir -p /home/node/.openclaw/litellm && echo '${litellmB64}' | base64 -d > ${LITELLM_CONFIG_PATH} && echo '${keyB64}' | base64 -d > ${LITELLM_KEY_PATH} && chmod 600 ${LITELLM_KEY_PATH} && ${runtimeOwnershipFixupCommand()}`,
@@ -2262,7 +2283,8 @@ Use this table to track verified peer OpenClaw instances.
   }
 
   async status(result: DeployResult): Promise<DeployResult> {
-    const runtime = result.config.containerRuntime ?? "podman";
+    const runtime = result.config.containerRuntime ?? (await detectRuntime());
+    if (!runtime) throw new Error("No container runtime found");
     const name = result.containerId ?? containerName(result.config);
     try {
       const { stdout } = await execFileAsync(runtime, [
@@ -2394,6 +2416,7 @@ Use this table to track verified peer OpenClaw instances.
 
     const copyResult = await runCommand(runtime, [
       "run", "--rm",
+      "--user", "0",
       ...localStateMountArgs(result.config),
       "-v", bindMountSpec(agentSourceDir, "/tmp/agent-source", "ro"),
       image, "sh", "-c", copyScript,
@@ -2438,7 +2461,8 @@ Use this table to track verified peer OpenClaw instances.
   }
 
   async stop(result: DeployResult, log: LogCallback): Promise<void> {
-    const runtime = result.config.containerRuntime ?? "podman";
+    const runtime = result.config.containerRuntime ?? (await detectRuntime());
+    if (!runtime) throw new Error("No container runtime found");
     const name = result.containerId ?? containerName(result.config);
     const isPodman = runtime === "podman";
 
@@ -2483,7 +2507,8 @@ Use this table to track verified peer OpenClaw instances.
   }
 
   async teardown(result: DeployResult, log: LogCallback): Promise<void> {
-    const runtime = (result.config.containerRuntime ?? "podman") as ContainerRuntime;
+    const runtime = (result.config.containerRuntime ?? (await detectRuntime())) as ContainerRuntime;
+    if (!runtime) throw new Error("No container runtime found");
     const name = result.containerId ?? containerName(result.config);
     const isPodman = runtime === "podman";
 
