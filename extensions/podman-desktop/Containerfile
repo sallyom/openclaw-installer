@@ -1,0 +1,32 @@
+FROM registry.access.redhat.com/ubi10/nodejs-22:latest AS builder
+
+USER 0
+
+WORKDIR /build
+
+COPY package.json package-lock.json* ./
+COPY packages/shared/package.json packages/shared/
+COPY packages/frontend/package.json packages/frontend/
+COPY packages/backend/package.json packages/backend/
+
+RUN npm ci --ignore-scripts
+
+COPY packages/shared/ packages/shared/
+COPY packages/frontend/ packages/frontend/
+COPY packages/backend/ packages/backend/
+
+RUN npm run build
+
+FROM scratch
+
+LABEL org.opencontainers.image.title="OpenClaw" \
+      org.opencontainers.image.description="Podman Desktop extension for launching OpenClaw AI agent deployments" \
+      org.opencontainers.image.vendor="redhat-et" \
+      org.opencontainers.image.source="https://github.com/redhat-et/openclaw-installer" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      io.podman-desktop.api.version=">= 1.0.0"
+
+COPY --from=builder /build/packages/backend/package.json /extension/
+COPY --from=builder /build/packages/backend/icon.png /extension/
+COPY --from=builder /build/packages/backend/dist/ /extension/dist/
+COPY --from=builder /build/packages/backend/media/ /extension/media/
