@@ -354,6 +354,27 @@ describe("gateway env vars in proxy mode", () => {
   });
 });
 
+// Regression test for #140: switching providers should not inject stale env var refs
+describe("gateway env vars with custom endpoint only", () => {
+  it("excludes provider env vars when those providers are not configured", () => {
+    const endpointConfig = makeConfig({
+      inferenceProvider: "custom-endpoint",
+      modelEndpoint: "http://vllm:8000/v1",
+      modelEndpointApiKey: "fake",
+    });
+
+    const deployment = deploymentManifest("ns", endpointConfig);
+    const envNames = gatewayEnvNames(deployment);
+
+    expect(envNames).not.toContain("ANTHROPIC_API_KEY");
+    expect(envNames).not.toContain("OPENAI_API_KEY");
+    expect(envNames).not.toContain("GEMINI_API_KEY");
+    expect(envNames).not.toContain("OPENROUTER_API_KEY");
+    expect(envNames).toContain("MODEL_ENDPOINT");
+    expect(envNames).toContain("MODEL_ENDPOINT_API_KEY");
+  });
+});
+
 /** Extract env var names from the LiteLLM sidecar container in a deployment manifest. */
 function litellmEnvNames(deployment: k8s.V1Deployment): string[] {
   const container = deployment.spec?.template.spec?.containers?.find((c) => c.name === "litellm");

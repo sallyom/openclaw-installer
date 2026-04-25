@@ -340,15 +340,7 @@ export function deploymentManifest(
   const useOtelDirect = useOtel && !otelViaOperator;
   const useChromium = shouldUseChromiumSidecar(config);
 
-  const optionalKeys = [
-    // Gateway always gets provider API keys so it can route to OpenAI/Anthropic
-    // natively. LiteLLM only handles Vertex models.
-    "ANTHROPIC_API_KEY",
-    "OPENAI_API_KEY",
-    "GEMINI_API_KEY",
-    "OPENROUTER_API_KEY",
-    "MODEL_ENDPOINT",
-    "MODEL_ENDPOINT_API_KEY",
+  const optionalKeys: string[] = [
     "TELEGRAM_BOT_TOKEN",
     // In proxy mode LiteLLM gets project/location from its config.yaml;
     // the gateway doesn't need them.
@@ -357,6 +349,18 @@ export function deploymentManifest(
     "SSH_CERTIFICATE",
     "SSH_KNOWN_HOSTS",
   ];
+  if (config.anthropicApiKey || config.anthropicApiKeyRef)
+    optionalKeys.push("ANTHROPIC_API_KEY");
+  if (config.openaiApiKey || config.openaiApiKeyRef)
+    optionalKeys.push("OPENAI_API_KEY");
+  if (config.googleApiKey || config.googleApiKeyRef)
+    optionalKeys.push("GEMINI_API_KEY");
+  if (config.openrouterApiKey || config.openrouterApiKeyRef)
+    optionalKeys.push("OPENROUTER_API_KEY");
+  if (config.modelEndpoint)
+    optionalKeys.push("MODEL_ENDPOINT");
+  if (config.modelEndpointApiKey || config.modelEndpoint)
+    optionalKeys.push("MODEL_ENDPOINT_API_KEY");
   for (const key of optionalKeys) {
     envVars.push({
       name: key,
