@@ -1,0 +1,33 @@
+{
+  "name": "openclaw-podman-extension",
+  "displayName": "OpenClaw",
+  "description": "Launch and configure OpenClaw AI agent deployments",
+  "version": "0.1.0",
+  "icon": "icon.png",
+  "publisher": "redhat-et",
+  "license": "Apache-2.0",
+  "engines": {
+    "podman-desktop": "^1.0.0"
+  },
+  "main": "./dist/extension.cjs",
+  "scripts": {
+    "build": "vite build",
+    "watch": "vite build --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "openclaw-podman-shared": "*",
+    "@podman-desktop/api": "^1.0.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "openclaw.openPanel",
+        "title": "Open OpenClaw",
+        "category": "OpenClaw"
+      }
+    ]
+  }
+}

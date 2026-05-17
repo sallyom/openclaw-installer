@@ -1,0 +1,21 @@
+{
+  "name": "openclaw-podman-extension",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Podman Desktop extension for launching OpenClaw AI agent deployments",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "workspaces": [
+    "packages/shared",
+    "packages/frontend",
+    "packages/backend"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "watch": "npm run watch --workspaces",
+    "typecheck": "npm run typecheck --workspaces",
+    "lint": "eslint ."
+  }
+}
