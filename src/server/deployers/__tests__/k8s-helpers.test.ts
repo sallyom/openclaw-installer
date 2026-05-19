@@ -1006,6 +1006,26 @@ describe("litellm model catalog in proxy mode", () => {
     // because it is already in agents.defaults.models via buildDefaultAgentModelCatalog
     expect(modelIds).not.toContain("claude-sonnet-4-6");
   });
+
+  it("caps Anthropic Vertex LiteLLM models at the provider max output tokens", () => {
+    const config = makeConfig({
+      inferenceProvider: "vertex-anthropic",
+      vertexProvider: "anthropic",
+      litellmProxy: true,
+      gcpServiceAccountJson: '{"project_id":"test"}',
+    });
+
+    const rendered = buildOpenClawConfig(config, "gateway-token") as {
+      models?: { providers?: { litellm?: { maxTokens?: number; models?: Array<{ id: string; maxTokens?: number }> } } };
+    };
+
+    expect(rendered.models?.providers?.litellm?.maxTokens).toBe(128000);
+    expect(rendered.models?.providers?.litellm?.models).toContainEqual({
+      id: "claude-haiku-4-5",
+      name: "claude-haiku-4-5",
+      maxTokens: 128000,
+    });
+  });
 });
 
 // Regression tests for #7: agent names with underscores must produce valid namespaces

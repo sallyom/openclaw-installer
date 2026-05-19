@@ -37,6 +37,12 @@ export const GOOGLE_PROVIDER = "google";
 export const GOOGLE_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 export const OPENROUTER_PROVIDER = "openrouter";
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+const ANTHROPIC_VERTEX_MAX_TOKENS = 128000;
+
+type ModelCatalogEntry = {
+  alias: string;
+  agentRuntime?: { id: string };
+};
 
 export function defaultImage(config: DeployConfig): string {
   if (config.image) return config.image;
@@ -125,10 +131,14 @@ export function normalizeModelRef(config: DeployConfig, modelRef: string): strin
   return `anthropic/${trimmed}`;
 }
 
-export function buildDefaultAgentModelCatalog(modelRef: string): Record<string, { alias: string }> {
+function modelCatalogEntry(modelRef: string, alias?: string): ModelCatalogEntry {
+  return { alias: alias || modelRef.split("/").pop() || modelRef };
+}
+
+export function buildDefaultAgentModelCatalog(modelRef: string): Record<string, ModelCatalogEntry> {
   const alias = modelRef.split("/").pop() || modelRef;
   return {
-    [modelRef]: { alias },
+    [modelRef]: modelCatalogEntry(modelRef, alias),
   };
 }
 
@@ -158,6 +168,10 @@ function normalizedModelOptions(primaryModel: string, extraModels: string[] = []
   return Array.from(models.values());
 }
 
+function anthropicVertexModelOption(modelId: string): DeployModelOption {
+  return { id: modelId, name: modelId, maxTokens: ANTHROPIC_VERTEX_MAX_TOKENS };
+}
+
 function anthropicVertexBaseUrl(location?: string): string {
   const normalized = location?.trim().toLowerCase();
   return normalized && normalized !== "global"
@@ -180,7 +194,8 @@ export function attachDirectVertexProviderModels(
       baseUrl: anthropicVertexBaseUrl(config.googleCloudLocation),
       api: ANTHROPIC_VERTEX_API,
       apiKey: GCP_VERTEX_CREDENTIALS_MARKER,
-      models: normalizedModelOptions(model, config.vertexAnthropicModels),
+      maxTokens: ANTHROPIC_VERTEX_MAX_TOKENS,
+      models: normalizedModelOptions(model, config.vertexAnthropicModels).map((option) => anthropicVertexModelOption(option.id)),
     };
   }
 
@@ -200,7 +215,7 @@ export function buildConfiguredAgentModelCatalog(
   config: DeployConfig,
   primaryModelRef: string,
   sourceBundle?: AgentSourceBundle,
-): Record<string, { alias: string }> {
+): Record<string, ModelCatalogEntry> {
   const catalog = buildDefaultAgentModelCatalog(primaryModelRef);
   const configuredModels = [
     {
@@ -259,37 +274,37 @@ export function buildConfiguredAgentModelCatalog(
     if (!modelRef) {
       continue;
     }
-    catalog[modelRef] = { alias: alias || modelRef.split("/").pop() || modelRef };
+    catalog[modelRef] = modelCatalogEntry(modelRef, alias);
   }
   for (const modelId of config.anthropicModels || []) {
     const trimmed = modelId.trim();
     if (!trimmed) continue;
     const ref = trimmed.includes("/") ? trimmed : `anthropic/${trimmed}`;
-    catalog[ref] = { alias: trimmed };
+    catalog[ref] = modelCatalogEntry(ref, trimmed);
   }
   for (const modelId of config.openaiModels || []) {
     const trimmed = modelId.trim();
     if (!trimmed) continue;
     const ref = trimmed.includes("/") ? trimmed : `openai/${trimmed}`;
-    catalog[ref] = { alias: trimmed };
+    catalog[ref] = modelCatalogEntry(ref, trimmed);
   }
   for (const modelId of config.codexModels || []) {
     const trimmed = modelId.trim();
     if (!trimmed) continue;
     const ref = normalizeCodexModelRef(trimmed);
-    catalog[ref] = { alias: codexModelIdFromRef(trimmed) };
+    catalog[ref] = modelCatalogEntry(ref, codexModelIdFromRef(trimmed));
   }
   for (const modelId of config.googleModels || []) {
     const trimmed = modelId.trim();
     if (!trimmed) continue;
     const ref = trimmed.includes("/") ? trimmed : `${GOOGLE_PROVIDER}/${trimmed}`;
-    catalog[ref] = { alias: trimmed };
+    catalog[ref] = modelCatalogEntry(ref, trimmed);
   }
   for (const modelId of config.openrouterModels || []) {
     const trimmed = modelId.trim();
     if (!trimmed) continue;
     const ref = trimmed.startsWith(`${OPENROUTER_PROVIDER}/`) ? trimmed : `${OPENROUTER_PROVIDER}/${trimmed}`;
-    catalog[ref] = { alias: trimmed };
+    catalog[ref] = modelCatalogEntry(ref, trimmed);
   }
   for (const option of config.modelEndpointModels || []) {
     const id = String(option.id || "").trim();
@@ -298,19 +313,19 @@ export function buildConfiguredAgentModelCatalog(
     }
     const ref = `${CUSTOM_ENDPOINT_PROVIDER}/${id}`;
     const alias = String(option.name || "").trim() || id;
-    catalog[ref] = { alias };
+    catalog[ref] = modelCatalogEntry(ref, alias);
   }
   for (const modelId of config.vertexAnthropicModels || []) {
     const trimmed = modelId.trim();
     if (!trimmed) continue;
     const ref = shouldUseLitellmProxy(config) ? `litellm/${trimmed}` : `anthropic-vertex/${trimmed}`;
-    catalog[ref] = { alias: trimmed };
+    catalog[ref] = modelCatalogEntry(ref, trimmed);
   }
   for (const modelId of config.vertexGoogleModels || []) {
     const trimmed = modelId.trim();
     if (!trimmed) continue;
     const ref = shouldUseLitellmProxy(config) ? `litellm/${trimmed}` : `google-vertex/${trimmed}`;
-    catalog[ref] = { alias: trimmed };
+    catalog[ref] = modelCatalogEntry(ref, trimmed);
   }
   const bundleModelRefs = new Set<string>();
   const collectModelRefs = (model?: { primary?: string; fallbacks?: string[] }) => {
@@ -334,7 +349,7 @@ export function buildConfiguredAgentModelCatalog(
       continue;
     }
     if (!(modelRef in catalog)) {
-      catalog[modelRef] = { alias: modelRef.split("/").pop() || modelRef };
+      catalog[modelRef] = modelCatalogEntry(modelRef);
     }
   }
   return catalog;
@@ -851,9 +866,12 @@ export function buildOpenClawConfig(config: DeployConfig, gatewayToken: string):
           litellm: {
             baseUrl: `http://localhost:${LITELLM_PORT}/v1`,
             api: "openai-completions",
+            ...(config.vertexProvider === "anthropic" ? { maxTokens: ANTHROPIC_VERTEX_MAX_TOKENS } : {}),
             models: litellmRegisteredModelNames(config)
               .filter((name) => name !== litellmModelName(config))
-              .map((name) => ({ id: name, name })),
+              .map((name) => config.vertexProvider === "anthropic"
+                ? anthropicVertexModelOption(name)
+                : { id: name, name }),
           },
         },
       },

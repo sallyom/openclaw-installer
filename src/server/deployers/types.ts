@@ -23,6 +23,7 @@ export interface DeploySecretRef {
 export interface DeployModelOption {
   id: string;
   name?: string;
+  maxTokens?: number;
 }
 
 export interface DeployConfig {
